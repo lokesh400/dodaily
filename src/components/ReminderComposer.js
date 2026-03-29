@@ -30,7 +30,7 @@ export default function ReminderComposer({ selectedDate, onCreate, loading }) {
       />
       <TextInput
         style={styles.input}
-        placeholder="Time (e.g. 09:30 AM)"
+        placeholder="Time (e.g. 09:30 or 09:30 AM)"
         placeholderTextColor="#6f7f86"
         value={time}
         onChangeText={setTime}

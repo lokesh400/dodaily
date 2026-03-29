@@ -1,7 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Modal,
   Platform,
@@ -20,7 +21,6 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { login, logout, me, register, updateMe } from './src/api/authApi';
 import BottomNav from './src/components/BottomNav';
 import DateBar from './src/components/DateBar';
-import ReminderComposer from './src/components/ReminderComposer';
 import {
   getFriendBadges,
   listFriendRequests,
@@ -42,42 +42,19 @@ import LoginScreen from './src/screens/LoginScreen';
 import PlannerTabScreen from './src/screens/PlannerTabScreen';
 import RemindersTabScreen from './src/screens/RemindersTabScreen';
 import SettingsTabScreen from './src/screens/SettingsTabScreen';
+// import { sendVerificationEmail, updateMe } from './src/api/authApi';
+// import { updateMe } from './src/api/authApi';
+import { sendVerificationEmail } from './src/api/authApi';
 import SignupScreen from './src/screens/SignupScreen';
+import {
+  clearReminderNotifications,
+  initializeNotifications,
+  showImmediateNotification,
+  syncReminderNotifications,
+} from './src/utils/notifications';
+import { isValidClockTime, parseClockTime, parseTimeToMinutes } from './src/utils/time';
 
-let PushNotification;
-try {
-  // Non-Expo React Native notifications module (requires native build/dev client)
-  const imported = require('react-native-push-notification');
-  PushNotification = imported.default || imported;
-} catch (error) {
-  PushNotification = null;
-}
-
-function setupNotificationChannel() {
-  try {
-    PushNotification?.createChannel?.(
-      {
-        channelId: 'friend-requests',
-        channelName: 'Friend Requests',
-      },
-      () => {}
-    );
-  } catch (error) {
-    // Ignore notification setup failures in unsupported environments.
-  }
-}
-
-function sendLocalFriendNotification() {
-  try {
-    PushNotification?.localNotification?.({
-      channelId: 'friend-requests',
-      title: 'New Planner Request',
-      message: 'A friend sent you a planner/reminder request for approval.',
-    });
-  } catch (error) {
-    // Ignore local notification failures in unsupported environments.
-  }
-}
+const POLL_INTERVAL_MS = 4000;
 
 function toISODate(date) {
   const year = date.getFullYear();
@@ -94,29 +71,59 @@ function normalizeTaskStatus(task) {
   return task.completed ? 'completed' : 'pending';
 }
 
-function parseTimeToMinutes(timeText) {
-  if (!timeText) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  const parts = timeText.split(':');
-  if (parts.length < 2) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  const hours = Number(parts[0]);
-  const minutes = Number(parts[1]);
-  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  return hours * 60 + minutes;
-}
-
 function formatTimeString(date) {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
+}
+
+function filterItemsByStatus(items, status) {
+  if (status === 'all') {
+    return items;
+  }
+
+  return items.filter((item) => item.status === status);
+}
+
+function getPersonLabel(person, fallback = 'Someone') {
+  return person?.displayName || person?.username || fallback;
+}
+
+function buildIncomingAssignmentNotification(assignment) {
+  const senderName = getPersonLabel(assignment.fromUser);
+  const itemLabel = assignment.itemType === 'reminder' ? 'reminder' : 'planner';
+  const dueText = assignment.time ? `${assignment.date} at ${assignment.time}` : assignment.date;
+
+  return {
+    title: assignment.itemType === 'reminder' ? 'New Reminder Request' : 'New Planner Request',
+    body: `${senderName} sent you a ${itemLabel} for ${dueText}.`,
+  };
+}
+
+function showMailVerificationPopup() {
+  Alert.alert('Verification Required', 'Please Verify Your Mail In Settings First !');
+}
+
+function isMailVerificationRequired(error) {
+  return error?.status === 403 && /verify your mail first/i.test(error?.message || '');
+}
+
+function getReminderTimestamp(reminder) {
+  const parsedTime = parseClockTime(reminder.time);
+  if (!parsedTime || !reminder.date) {
+    return null;
+  }
+
+  const [year, month, day] = String(reminder.date)
+    .split('-')
+    .map((value) => Number(value));
+
+  if ([year, month, day].some((value) => Number.isNaN(value))) {
+    return null;
+  }
+
+  const reminderDate = new Date(year, month - 1, day, parsedTime.hours, parsedTime.minutes, 0, 0);
+  return Number.isNaN(reminderDate.getTime()) ? null : reminderDate.getTime();
 }
 
 export default function App() {
@@ -134,16 +141,23 @@ export default function App() {
   const [showPlannerTaskModal, setShowPlannerTaskModal] = useState(false);
   const [showTaskTimePicker, setShowTaskTimePicker] = useState(false);
   const [activeTaskActionItem, setActiveTaskActionItem] = useState(null);
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [showReminderTimePicker, setShowReminderTimePicker] = useState(false);
+  const [activeReminderActionItem, setActiveReminderActionItem] = useState(null);
 
   const [taskTitleInput, setTaskTitleInput] = useState('');
   const [taskNotesInput, setTaskNotesInput] = useState('');
   const [taskTimeInput, setTaskTimeInput] = useState('');
+  const [reminderTitleInput, setReminderTitleInput] = useState('');
+  const [reminderNotesInput, setReminderNotesInput] = useState('');
+  const [reminderTimeInput, setReminderTimeInput] = useState('');
 
   const [displayNameInput, setDisplayNameInput] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
   const [user, setUser] = useState(null);
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [reminders, setReminders] = useState([]);
   const [friends, setFriends] = useState([]);
@@ -161,7 +175,6 @@ export default function App() {
   const [friendRequestFilter, setFriendRequestFilter] = useState('pending');
   const [incomingAssignmentFilter, setIncomingAssignmentFilter] = useState('pending');
   const [outgoingAssignmentFilter, setOutgoingAssignmentFilter] = useState('all');
-  const [lastIncomingAssignmentCount, setLastIncomingAssignmentCount] = useState(0);
   const [showFriendRequestsModal, setShowFriendRequestsModal] = useState(false);
   const [showAddFriendModal, setShowAddFriendModal] = useState(false);
   const [showFriendActionMenu, setShowFriendActionMenu] = useState(false);
@@ -182,6 +195,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState('');
+  const notificationSnapshotRef = useRef({
+    isPrimed: false,
+    incomingFriendRequestIds: new Set(),
+    outgoingFriendRequestStatuses: new Map(),
+    incomingAssignmentIds: new Set(),
+  });
 
   const welcomeText = useMemo(() => {
     if (!user) {
@@ -200,6 +219,11 @@ export default function App() {
     () => reminders.filter((reminder) => reminder.date === selectedDate),
     [reminders, selectedDate]
   );
+
+  const sortedReminders = useMemo(() => {
+    return selectedReminders
+      .sort((a, b) => parseTimeToMinutes(a.time) - parseTimeToMinutes(b.time));
+  }, [selectedReminders]);
 
   const roadmapTasks = useMemo(() => {
     return selectedTasks
@@ -228,6 +252,26 @@ export default function App() {
     );
   }, [selectedTasks]);
 
+  const reminderCounts = useMemo(() => {
+    return selectedReminders.reduce(
+      (acc, reminder) => {
+        if (reminder.done) {
+          acc.completed += 1;
+        } else {
+          acc.pending += 1;
+        }
+
+        const reminderTimestamp = getReminderTimestamp(reminder);
+        if (!reminder.done && reminderTimestamp && reminderTimestamp > Date.now()) {
+          acc.upcoming += 1;
+        }
+
+        return acc;
+      },
+      { pending: 0, completed: 0, upcoming: 0 }
+    );
+  }, [selectedReminders]);
+
   const filteredFriends = useMemo(() => {
     const query = friendSearchInput.trim().toLowerCase();
     if (!query) {
@@ -247,7 +291,136 @@ export default function App() {
       .map((friend) => friend.displayName || friend.username);
   }, [friends, selectedFriendIds]);
 
-  const loadAllData = async () => {
+  const reminderNotificationPlan = useMemo(() => {
+    return reminders
+      .map((reminder) => ({
+        _id: reminder._id,
+        title: reminder.title,
+        date: reminder.date,
+        time: reminder.time,
+        done: reminder.done,
+        createdByName: reminder.createdBy?.displayName || reminder.createdBy?.username || '',
+      }))
+      .sort((a, b) => String(a._id).localeCompare(String(b._id)));
+  }, [reminders]);
+
+  const reminderNotificationSignature = useMemo(
+    () => JSON.stringify(reminderNotificationPlan),
+    [reminderNotificationPlan]
+  );
+  const reminderNotificationPlanRef = useRef(reminderNotificationPlan);
+  reminderNotificationPlanRef.current = reminderNotificationPlan;
+
+  const refreshAllData = async (options = {}) => {
+    try {
+      await loadAllData(options);
+      return true;
+    } catch (requestError) {
+      if (requestError?.status === 401) {
+        setError('Your session expired. Please log in again.');
+        setUser(null);
+        return false;
+      }
+
+      setError(requestError?.message || 'Could not refresh your data right now.');
+      return false;
+    }
+  };
+
+  const syncLiveNotifications = async ({ friendRequestsData, incomingAssignmentsData, suppressNotifications }) => {
+    const pendingIncomingFriendRequests = (friendRequestsData.incoming || []).filter(
+      (request) => request.status === 'pending'
+    );
+    const pendingIncomingAssignments = (incomingAssignmentsData || []).filter(
+      (assignment) => assignment.status === 'pending'
+    );
+
+    const nextIncomingFriendRequestIds = new Set(
+      pendingIncomingFriendRequests.map((request) => String(request._id))
+    );
+    const nextOutgoingFriendRequestStatuses = new Map(
+      (friendRequestsData.outgoing || []).map((request) => [String(request._id), request.status])
+    );
+    const nextIncomingAssignmentIds = new Set(
+      pendingIncomingAssignments.map((assignment) => String(assignment._id))
+    );
+
+    const snapshot = notificationSnapshotRef.current;
+    if (!snapshot.isPrimed || suppressNotifications) {
+      notificationSnapshotRef.current = {
+        isPrimed: true,
+        incomingFriendRequestIds: nextIncomingFriendRequestIds,
+        outgoingFriendRequestStatuses: nextOutgoingFriendRequestStatuses,
+        incomingAssignmentIds: nextIncomingAssignmentIds,
+      };
+      return;
+    }
+
+    const notificationsToSend = [];
+
+    pendingIncomingFriendRequests.forEach((request) => {
+      const requestId = String(request._id);
+      if (!snapshot.incomingFriendRequestIds.has(requestId)) {
+        notificationsToSend.push(
+          showImmediateNotification({
+            title: 'New Friend Request',
+            body: `${getPersonLabel(request.fromUser)} sent you a friend request.`,
+            data: {
+              notificationType: 'friend-request',
+              requestId,
+            },
+          })
+        );
+      }
+    });
+
+    (friendRequestsData.outgoing || []).forEach((request) => {
+      const requestId = String(request._id);
+      const previousStatus = snapshot.outgoingFriendRequestStatuses.get(requestId);
+      if (previousStatus === 'pending' && request.status === 'accepted') {
+        notificationsToSend.push(
+          showImmediateNotification({
+            title: 'Friend Request Accepted',
+            body: `${getPersonLabel(request.toUser)} accepted your friend request.`,
+            data: {
+              notificationType: 'friend-request-accepted',
+              requestId,
+            },
+          })
+        );
+      }
+    });
+
+    pendingIncomingAssignments.forEach((assignment) => {
+      const assignmentId = String(assignment._id);
+      if (!snapshot.incomingAssignmentIds.has(assignmentId)) {
+        const notificationDetails = buildIncomingAssignmentNotification(assignment);
+        notificationsToSend.push(
+          showImmediateNotification({
+            ...notificationDetails,
+            data: {
+              notificationType: assignment.itemType === 'reminder' ? 'incoming-reminder-request' : 'incoming-planner-request',
+              assignmentId,
+            },
+          })
+        );
+      }
+    });
+
+    if (notificationsToSend.length > 0) {
+      await Promise.all(notificationsToSend);
+    }
+
+    notificationSnapshotRef.current = {
+      isPrimed: true,
+      incomingFriendRequestIds: nextIncomingFriendRequestIds,
+      outgoingFriendRequestStatuses: nextOutgoingFriendRequestStatuses,
+      incomingAssignmentIds: nextIncomingAssignmentIds,
+    };
+  };
+
+  const loadAllData = async ({ suppressNotifications = false, verifiedOverride } = {}) => {
+    const canUseFriendFeatures = Boolean(verifiedOverride ?? user?.verified);
     const [
       taskData,
       reminderData,
@@ -259,43 +432,49 @@ export default function App() {
     ] = await Promise.all([
       listTasks(),
       listReminders(),
-      listFriends(),
-      listFriendRequests(friendRequestFilter),
-      listIncomingAssignments(incomingAssignmentFilter),
-      listOutgoingAssignments(outgoingAssignmentFilter),
-      getFriendBadges(),
+      canUseFriendFeatures ? listFriends() : Promise.resolve({ friends: [] }),
+      canUseFriendFeatures ? listFriendRequests('all') : Promise.resolve({ incoming: [], outgoing: [] }),
+      canUseFriendFeatures ? listIncomingAssignments('all') : Promise.resolve([]),
+      canUseFriendFeatures ? listOutgoingAssignments('all') : Promise.resolve([]),
+      canUseFriendFeatures ? getFriendBadges() : Promise.resolve({ totalPendingApprovals: 0 }),
     ]);
 
     setTasks(taskData);
     setReminders(reminderData);
     setFriends(friendsData.friends || []);
-    setIncomingFriendRequests(friendRequestsData.incoming || []);
-    setOutgoingFriendRequests(friendRequestsData.outgoing || []);
-    setIncomingAssignments(incomingAssignmentsData || []);
-    setOutgoingAssignments(outgoingAssignmentsData || []);
+    setIncomingFriendRequests(filterItemsByStatus(friendRequestsData.incoming || [], friendRequestFilter));
+    setOutgoingFriendRequests(filterItemsByStatus(friendRequestsData.outgoing || [], friendRequestFilter));
+    setIncomingAssignments(filterItemsByStatus(incomingAssignmentsData || [], incomingAssignmentFilter));
+    setOutgoingAssignments(filterItemsByStatus(outgoingAssignmentsData || [], outgoingAssignmentFilter));
     setPendingApprovalsBadge(badgeData.totalPendingApprovals || 0);
 
-    if (incomingAssignmentFilter === 'pending') {
-      const currentCount = (incomingAssignmentsData || []).length;
-      if (lastIncomingAssignmentCount > 0 && currentCount > lastIncomingAssignmentCount) {
-        sendLocalFriendNotification();
-      }
-      setLastIncomingAssignmentCount(currentCount);
-    }
+    await syncLiveNotifications({
+      friendRequestsData,
+      incomingAssignmentsData,
+      suppressNotifications: suppressNotifications || !canUseFriendFeatures,
+    });
   };
 
   useEffect(() => {
-    setupNotificationChannel();
-  }, []);
+    if (!user) {
+      return;
+    }
+
+    initializeNotifications();
+  }, [user]);
 
   useEffect(() => {
     async function bootstrap() {
       try {
         const currentUser = await me();
         setUser(currentUser);
-        await loadAllData();
+        await refreshAllData({ suppressNotifications: true, verifiedOverride: currentUser.verified });
       } catch (bootstrapError) {
-        setUser(null);
+        if (bootstrapError?.status === 401) {
+          setUser(null);
+        } else {
+          setError(bootstrapError?.message || 'Could not restore your session right now.');
+        }
       } finally {
         setBooting(false);
       }
@@ -305,11 +484,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (user) {
+      return undefined;
+    }
+
+    notificationSnapshotRef.current = {
+      isPrimed: false,
+      incomingFriendRequestIds: new Set(),
+      outgoingFriendRequestStatuses: new Map(),
+      incomingAssignmentIds: new Set(),
+    };
+
+    clearReminderNotifications();
+    return undefined;
+  }, [user]);
+
+  useEffect(() => {
     if (!user) {
       return;
     }
 
-    loadAllData();
+    refreshAllData();
   }, [friendRequestFilter, incomingAssignmentFilter, outgoingAssignmentFilter]);
 
   useEffect(() => {
@@ -318,11 +513,19 @@ export default function App() {
     }
 
     const intervalId = setInterval(() => {
-      loadAllData();
-    }, 12000);
+      refreshAllData();
+    }, POLL_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
   }, [user, friendRequestFilter, incomingAssignmentFilter, outgoingAssignmentFilter]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    syncReminderNotifications(reminderNotificationPlanRef.current);
+  }, [user, reminderNotificationSignature]);
 
   const handleLogin = async ({ username, password }) => {
     setError('');
@@ -330,7 +533,7 @@ export default function App() {
     try {
       const authUser = await login({ username, password });
       setUser(authUser);
-      await loadAllData();
+      await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
     } catch (authError) {
       setError(authError.message);
     } finally {
@@ -344,7 +547,7 @@ export default function App() {
     try {
       const authUser = await register({ displayName, username, password });
       setUser(authUser);
-      await loadAllData();
+      await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
     } catch (authError) {
       setError(authError.message);
     } finally {
@@ -357,7 +560,7 @@ export default function App() {
     setLoading(true);
     try {
       await createTask({ title, notes, date, time: time || '', status: 'pending' });
-      await loadAllData();
+      await refreshAllData();
     } catch (taskError) {
       setError(taskError.message);
     } finally {
@@ -373,7 +576,7 @@ export default function App() {
     setError('');
     try {
       await updateTask(task._id, { status: nextStatus });
-      await loadAllData();
+      await refreshAllData();
     } catch (taskError) {
       setError(taskError.message);
     }
@@ -383,7 +586,7 @@ export default function App() {
     setError('');
     try {
       await updateTask(task._id, { status });
-      await loadAllData();
+      await refreshAllData();
     } catch (taskError) {
       setError(taskError.message);
     } finally {
@@ -395,18 +598,29 @@ export default function App() {
     setError('');
     try {
       await deleteTaskById(taskId);
-      await loadAllData();
+      await refreshAllData();
     } catch (taskError) {
       setError(taskError.message);
     }
   };
 
   const handleCreateReminder = async ({ title, time, notes, date }) => {
+    const trimmedTime = time.trim();
+    if (!trimmedTime) {
+      setError('Reminder time is required');
+      return;
+    }
+
+    if (!isValidClockTime(trimmedTime)) {
+      setError('Enter reminder time like 09:30 or 09:30 AM');
+      return;
+    }
+
     setError('');
     setLoading(true);
     try {
-      await createReminder({ title, time, notes, date });
-      await loadAllData();
+      await createReminder({ title, time: trimmedTime, notes, date });
+      await refreshAllData();
     } catch (reminderError) {
       setError(reminderError.message);
     } finally {
@@ -418,7 +632,7 @@ export default function App() {
     setError('');
     try {
       await updateReminder(reminder._id, { done: !reminder.done });
-      await loadAllData();
+      await refreshAllData();
     } catch (reminderError) {
       setError(reminderError.message);
     }
@@ -428,26 +642,45 @@ export default function App() {
     setError('');
     try {
       await deleteReminder(reminderId);
-      await loadAllData();
+      await refreshAllData();
     } catch (reminderError) {
       setError(reminderError.message);
     }
   };
 
+  const setReminderDone = async (reminder, done) => {
+    setError('');
+    try {
+      await updateReminder(reminder._id, { done });
+      await refreshAllData();
+    } catch (reminderError) {
+      setError(reminderError.message);
+    } finally {
+      setActiveReminderActionItem(null);
+    }
+  };
+
   const addFriend = async () => {
+    if (!user?.verified) {
+      showMailVerificationPopup();
+      return;
+    }
     if (!friendUsernameInput.trim()) {
       setError('Enter a username to add friend');
       return;
     }
-
     setError('');
     setLoading(true);
     try {
       await sendFriendRequest({ username: friendUsernameInput.trim() });
       setFriendUsernameInput('');
       setShowAddFriendModal(false);
-      await loadAllData();
+      await refreshAllData();
     } catch (friendError) {
+      if (isMailVerificationRequired(friendError)) {
+        showMailVerificationPopup();
+        return;
+      }
       setError(friendError.message);
     } finally {
       setLoading(false);
@@ -455,11 +688,19 @@ export default function App() {
   };
 
   const answerFriendRequest = async (requestId, action) => {
+    if (!user?.verified) {
+      showMailVerificationPopup();
+      return;
+    }
     setError('');
     try {
       await respondFriendRequest(requestId, action);
-      await loadAllData();
+      await refreshAllData();
     } catch (friendError) {
+      if (isMailVerificationRequired(friendError)) {
+        showMailVerificationPopup();
+        return;
+      }
       setError(friendError.message);
     }
   };
@@ -468,7 +709,7 @@ export default function App() {
     setError('');
     try {
       await respondAssignment(assignmentId, action);
-      await loadAllData();
+      await refreshAllData();
     } catch (assignmentError) {
       setError(assignmentError.message);
     }
@@ -485,21 +726,22 @@ export default function App() {
   };
 
   const sendSharedItem = async (type) => {
+    if (!user?.verified) {
+      showMailVerificationPopup();
+      return;
+    }
     if (!shareTitleInput.trim() || !shareDateInput.trim()) {
       setError('Title and date are required to share with friends');
       return;
     }
-
     if (type === 'reminder' && !shareTimeInput.trim()) {
       setError('Time is required when sharing reminder to friend');
       return;
     }
-
     if (selectedFriendIds.length === 0) {
       setError('Select at least one friend');
       return;
     }
-
     setError('');
     setLoading(true);
     try {
@@ -515,7 +757,6 @@ export default function App() {
           })
         )
       );
-
       setShareTitleInput('');
       setShareNotesInput('');
       setShareTimeInput('');
@@ -523,8 +764,12 @@ export default function App() {
       setFriendSearchInput('');
       setShowFriendPickerModal(false);
       setShowFriendShareModal(false);
-      await loadAllData();
+      await refreshAllData();
     } catch (shareError) {
+      if (isMailVerificationRequired(shareError)) {
+        showMailVerificationPopup();
+        return;
+      }
       setError(shareError.message);
     } finally {
       setLoading(false);
@@ -532,6 +777,11 @@ export default function App() {
   };
 
   const openFriendShareModal = (type) => {
+    if (!user?.verified) {
+      showMailVerificationPopup();
+      return;
+    }
+
     setFriendShareType(type);
     setShareTitleInput('');
     setShareNotesInput('');
@@ -562,6 +812,7 @@ export default function App() {
     setLoggingOut(true);
     try {
       await logout();
+      clearReminderNotifications();
       setUser(null);
       setAuthScreen('login');
       setActiveTab('planner');
@@ -570,7 +821,9 @@ export default function App() {
       setShowFriendShareModal(false);
       setShowAddFriendModal(false);
       setShowFriendActivityModal(false);
+      setShowReminderModal(false);
       setActiveFriendActivity(null);
+      setActiveReminderActionItem(null);
     } catch (logoutError) {
       setError(logoutError.message);
     } finally {
@@ -616,6 +869,13 @@ export default function App() {
     setShowPlannerTaskModal(true);
   };
 
+  const openReminderModal = () => {
+    setReminderTitleInput('');
+    setReminderNotesInput('');
+    setReminderTimeInput('');
+    setShowReminderModal(true);
+  };
+
   const submitPlannerTaskModal = async () => {
     if (!taskTitleInput.trim()) {
       setError('Task title is required');
@@ -632,9 +892,54 @@ export default function App() {
     setShowPlannerTaskModal(false);
   };
 
+  const submitReminderModal = async () => {
+    if (!reminderTitleInput.trim()) {
+      setError('Reminder title is required');
+      return;
+    }
+
+    if (!reminderTimeInput.trim()) {
+      setError('Reminder time is required');
+      return;
+    }
+
+    await handleCreateReminder({
+      title: reminderTitleInput.trim(),
+      notes: reminderNotesInput.trim(),
+      date: selectedDate,
+      time: reminderTimeInput,
+    });
+
+    setShowReminderModal(false);
+  };
+
   const openAddFriendModal = () => {
+    if (!user?.verified) {
+      showMailVerificationPopup();
+      return;
+    }
+
     setError('');
     setShowAddFriendModal(true);
+  };
+
+  const openFriendRequestsModal = () => {
+    if (!user?.verified) {
+      showMailVerificationPopup();
+      return;
+    }
+
+    setShowFriendRequestsModal(true);
+  };
+
+  const openFriendActionMenu = () => {
+    if (!user?.verified) {
+      showMailVerificationPopup();
+      return;
+    }
+
+    setError('');
+    setShowFriendActionMenu(true);
   };
 
   if (booting) {
@@ -759,13 +1064,12 @@ export default function App() {
 
         {activeTab === 'reminders' ? (
           <RemindersTabScreen
-            selectedDate={selectedDate}
-            handleCreateReminder={handleCreateReminder}
-            loading={loading}
-            selectedReminders={selectedReminders}
+            reminderCounts={reminderCounts}
+            sortedReminders={sortedReminders}
             user={user}
-            toggleReminderDone={toggleReminderDone}
-            removeReminder={removeReminder}
+            onToggleReminderDone={toggleReminderDone}
+            onOpenReminderActions={setActiveReminderActionItem}
+            onOpenCreateReminder={openReminderModal}
           />
         ) : null}
 
@@ -774,8 +1078,8 @@ export default function App() {
             friends={friends}
             incomingFriendRequests={incomingFriendRequests}
             onOpenAddFriendModal={openAddFriendModal}
-            onOpenRequestsModal={() => setShowFriendRequestsModal(true)}
-            onOpenQuickAddModal={() => setShowFriendActionMenu(true)}
+            onOpenRequestsModal={openFriendRequestsModal}
+            onOpenQuickAddModal={openFriendActionMenu}
             onSelectFriend={openFriendActivityModal}
           />
         ) : null}
@@ -789,6 +1093,20 @@ export default function App() {
             savingProfile={savingProfile}
             handleLogout={handleLogout}
             loggingOut={loggingOut}
+            onVerifyEmail={async (email) => {
+              setVerifyingEmail(true);
+              try {
+                const updatedUser = await updateMe({ email });
+                setUser(updatedUser);
+                await sendVerificationEmail();
+                setError('Verification email sent!');
+              } catch (e) {
+                setError(e.message || 'Failed to send verification email');
+              } finally {
+                setVerifyingEmail(false);
+              }
+            }}
+            verifyingEmail={verifyingEmail}
           />
         ) : null}
 
@@ -980,6 +1298,101 @@ export default function App() {
 
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.settingsCancelButton} onPress={() => setActiveTaskActionItem(null)}>
+                <Text style={styles.settingsCancelText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showReminderModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowReminderModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Add Reminder</Text>
+            <Text style={styles.composerHint}>Date: {selectedDate}</Text>
+
+            <TextInput
+              style={styles.input}
+              placeholder="Reminder title"
+              placeholderTextColor="#6f7f86"
+              value={reminderTitleInput}
+              onChangeText={setReminderTitleInput}
+            />
+
+            <TouchableOpacity style={styles.timePickerButton} onPress={() => setShowReminderTimePicker(true)}>
+              <Text style={styles.timePickerText}>{reminderTimeInput ? `Time: ${reminderTimeInput}` : 'Pick Time (Required)'}</Text>
+              <MaterialCommunityIcons name="clock-outline" size={18} color="#0d7a76" />
+            </TouchableOpacity>
+
+            {reminderTimeInput ? (
+              <TouchableOpacity style={styles.clearTimeButton} onPress={() => setReminderTimeInput('')}>
+                <Text style={styles.clearTimeText}>Clear Time</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            <TextInput
+              style={[styles.input, styles.multilineInput]}
+              placeholder="Notes (optional)"
+              placeholderTextColor="#6f7f86"
+              value={reminderNotesInput}
+              onChangeText={setReminderNotesInput}
+              multiline
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.settingsCancelButton} onPress={() => setShowReminderModal(false)}>
+                <Text style={styles.settingsCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.settingsSaveButton} onPress={submitReminderModal} disabled={loading}>
+                <Text style={styles.settingsSaveText}>{loading ? 'Saving...' : 'Add Reminder'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={Boolean(activeReminderActionItem)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setActiveReminderActionItem(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Reminder Actions</Text>
+            <Text style={styles.composerHint}>{activeReminderActionItem?.title || 'Select an action'}</Text>
+
+            <View style={styles.actionsMenu}>
+              <TouchableOpacity
+                style={styles.actionOption}
+                onPress={() => setReminderDone(activeReminderActionItem, false)}
+              >
+                <Text style={styles.actionOptionText}>Pending</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionOption}
+                onPress={() => setReminderDone(activeReminderActionItem, true)}
+              >
+                <Text style={styles.actionOptionText}>Completed</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionOption, styles.actionDeleteOption]}
+                onPress={() => {
+                  removeReminder(activeReminderActionItem._id);
+                  setActiveReminderActionItem(null);
+                }}
+              >
+                <Text style={styles.actionDeleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.settingsCancelButton} onPress={() => setActiveReminderActionItem(null)}>
                 <Text style={styles.settingsCancelText}>Close</Text>
               </TouchableOpacity>
             </View>
@@ -1275,6 +1688,23 @@ export default function App() {
 
             setTaskTimeInput(formatTimeString(pickedDate));
             setShowTaskTimePicker(false);
+          }}
+        />
+      ) : null}
+
+      {showReminderTimePicker ? (
+        <DateTimePicker
+          value={new Date()}
+          mode="time"
+          display="default"
+          onChange={(event, pickedDate) => {
+            if (event.type === 'dismissed' || !pickedDate) {
+              setShowReminderTimePicker(false);
+              return;
+            }
+
+            setReminderTimeInput(formatTimeString(pickedDate));
+            setShowReminderTimePicker(false);
           }}
         />
       ) : null}

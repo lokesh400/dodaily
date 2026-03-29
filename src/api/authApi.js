@@ -1,4 +1,11 @@
+
 import { apiRequest } from './client';
+
+export function sendVerificationEmail() {
+  return apiRequest('/api/auth/send-verification', {
+    method: 'POST',
+  });
+}
 
 export function register(payload) {
   return apiRequest('/api/auth/register', {
