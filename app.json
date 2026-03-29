@@ -22,11 +22,19 @@
         "backgroundColor": "#ffffff"
       },
       "icon": "./assets/icon.png",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.lokesh400.DoDaily"
     },
-    "plugins": ["expo-notifications"],
+    "plugins": [
+      "expo-notifications"
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "13411891-6fa8-4023-a23e-ab1392ec1a78"
+      }
     }
   }
 }
