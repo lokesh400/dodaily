@@ -11,18 +11,26 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
-import { login, logout, me, register, updateMe } from './src/api/authApi';
+import {
+  login,
+  logout,
+  me,
+  register,
+  registerPushToken,
+  unregisterPushToken,
+  updateMe,
+} from './src/api/authApi';
 import BottomNav from './src/components/BottomNav';
 import DateBar from './src/components/DateBar';
+import ActionStatusModal from './src/components/ActionStatusModal';
+import HapticTouchable from './src/components/HapticTouchable';
 import {
-  getFriendBadges,
   listFriendRequests,
   listFriends,
   respondFriendRequest,
@@ -48,13 +56,15 @@ import { sendVerificationEmail } from './src/api/authApi';
 import SignupScreen from './src/screens/SignupScreen';
 import {
   clearReminderNotifications,
+  getRemotePushToken,
   initializeNotifications,
-  showImmediateNotification,
   syncReminderNotifications,
 } from './src/utils/notifications';
+import { triggerErrorFeedback, triggerSuccessFeedback } from './src/utils/haptics';
 import { isValidClockTime, parseClockTime, parseTimeToMinutes } from './src/utils/time';
 
 const POLL_INTERVAL_MS = 4000;
+const TouchableOpacity = HapticTouchable;
 
 function toISODate(date) {
   const year = date.getFullYear();
@@ -77,27 +87,21 @@ function formatTimeString(date) {
   return `${hours}:${minutes}`;
 }
 
+function compareItemsBySchedule(a, b) {
+  const dateCompare = String(a?.date || '').localeCompare(String(b?.date || ''));
+  if (dateCompare !== 0) {
+    return dateCompare;
+  }
+
+  return parseTimeToMinutes(a?.time || '') - parseTimeToMinutes(b?.time || '');
+}
+
 function filterItemsByStatus(items, status) {
   if (status === 'all') {
     return items;
   }
 
   return items.filter((item) => item.status === status);
-}
-
-function getPersonLabel(person, fallback = 'Someone') {
-  return person?.displayName || person?.username || fallback;
-}
-
-function buildIncomingAssignmentNotification(assignment) {
-  const senderName = getPersonLabel(assignment.fromUser);
-  const itemLabel = assignment.itemType === 'reminder' ? 'reminder' : 'planner';
-  const dueText = assignment.time ? `${assignment.date} at ${assignment.time}` : assignment.date;
-
-  return {
-    title: assignment.itemType === 'reminder' ? 'New Reminder Request' : 'New Planner Request',
-    body: `${senderName} sent you a ${itemLabel} for ${dueText}.`,
-  };
 }
 
 function showMailVerificationPopup() {
@@ -170,7 +174,6 @@ export default function App() {
   const [activeFriendActivity, setActiveFriendActivity] = useState(null);
   const [showFriendActivityModal, setShowFriendActivityModal] = useState(false);
   const [friendActivityLoading, setFriendActivityLoading] = useState(false);
-  const [pendingApprovalsBadge, setPendingApprovalsBadge] = useState(0);
 
   const [friendRequestFilter, setFriendRequestFilter] = useState('pending');
   const [incomingAssignmentFilter, setIncomingAssignmentFilter] = useState('pending');
@@ -195,12 +198,18 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState('');
+  const [actionStatus, setActionStatus] = useState({
+    visible: false,
+    title: '',
+    subtitle: '',
+  });
   const notificationSnapshotRef = useRef({
     isPrimed: false,
     incomingFriendRequestIds: new Set(),
     outgoingFriendRequestStatuses: new Map(),
     incomingAssignmentIds: new Set(),
   });
+  const registeredPushTokenRef = useRef(null);
 
   const welcomeText = useMemo(() => {
     if (!user) {
@@ -291,6 +300,18 @@ export default function App() {
       .map((friend) => friend.displayName || friend.username);
   }, [friends, selectedFriendIds]);
 
+  const incomingPlannerAssignments = useMemo(() => {
+    return (incomingAssignments || [])
+      .filter((assignment) => assignment.itemType === 'task' && assignment.status === 'pending')
+      .sort(compareItemsBySchedule);
+  }, [incomingAssignments]);
+
+  const incomingReminderAssignments = useMemo(() => {
+    return (incomingAssignments || [])
+      .filter((assignment) => assignment.itemType === 'reminder' && assignment.status === 'pending')
+      .sort(compareItemsBySchedule);
+  }, [incomingAssignments]);
+
   const reminderNotificationPlan = useMemo(() => {
     return reminders
       .map((reminder) => ({
@@ -310,6 +331,29 @@ export default function App() {
   );
   const reminderNotificationPlanRef = useRef(reminderNotificationPlan);
   reminderNotificationPlanRef.current = reminderNotificationPlan;
+
+  const runWithActionFeedback = async ({ title, subtitle = 'Please wait a moment.', work }) => {
+    setActionStatus({
+      visible: true,
+      title,
+      subtitle,
+    });
+
+    try {
+      const result = await work();
+      await triggerSuccessFeedback();
+      return result;
+    } catch (actionError) {
+      await triggerErrorFeedback();
+      throw actionError;
+    } finally {
+      setActionStatus({
+        visible: false,
+        title: '',
+        subtitle: '',
+      });
+    }
+  };
 
   const refreshAllData = async (options = {}) => {
     try {
@@ -356,61 +400,6 @@ export default function App() {
       return;
     }
 
-    const notificationsToSend = [];
-
-    pendingIncomingFriendRequests.forEach((request) => {
-      const requestId = String(request._id);
-      if (!snapshot.incomingFriendRequestIds.has(requestId)) {
-        notificationsToSend.push(
-          showImmediateNotification({
-            title: 'New Friend Request',
-            body: `${getPersonLabel(request.fromUser)} sent you a friend request.`,
-            data: {
-              notificationType: 'friend-request',
-              requestId,
-            },
-          })
-        );
-      }
-    });
-
-    (friendRequestsData.outgoing || []).forEach((request) => {
-      const requestId = String(request._id);
-      const previousStatus = snapshot.outgoingFriendRequestStatuses.get(requestId);
-      if (previousStatus === 'pending' && request.status === 'accepted') {
-        notificationsToSend.push(
-          showImmediateNotification({
-            title: 'Friend Request Accepted',
-            body: `${getPersonLabel(request.toUser)} accepted your friend request.`,
-            data: {
-              notificationType: 'friend-request-accepted',
-              requestId,
-            },
-          })
-        );
-      }
-    });
-
-    pendingIncomingAssignments.forEach((assignment) => {
-      const assignmentId = String(assignment._id);
-      if (!snapshot.incomingAssignmentIds.has(assignmentId)) {
-        const notificationDetails = buildIncomingAssignmentNotification(assignment);
-        notificationsToSend.push(
-          showImmediateNotification({
-            ...notificationDetails,
-            data: {
-              notificationType: assignment.itemType === 'reminder' ? 'incoming-reminder-request' : 'incoming-planner-request',
-              assignmentId,
-            },
-          })
-        );
-      }
-    });
-
-    if (notificationsToSend.length > 0) {
-      await Promise.all(notificationsToSend);
-    }
-
     notificationSnapshotRef.current = {
       isPrimed: true,
       incomingFriendRequestIds: nextIncomingFriendRequestIds,
@@ -428,7 +417,6 @@ export default function App() {
       friendRequestsData,
       incomingAssignmentsData,
       outgoingAssignmentsData,
-      badgeData,
     ] = await Promise.all([
       listTasks(),
       listReminders(),
@@ -436,7 +424,6 @@ export default function App() {
       canUseFriendFeatures ? listFriendRequests('all') : Promise.resolve({ incoming: [], outgoing: [] }),
       canUseFriendFeatures ? listIncomingAssignments('all') : Promise.resolve([]),
       canUseFriendFeatures ? listOutgoingAssignments('all') : Promise.resolve([]),
-      canUseFriendFeatures ? getFriendBadges() : Promise.resolve({ totalPendingApprovals: 0 }),
     ]);
 
     setTasks(taskData);
@@ -446,7 +433,6 @@ export default function App() {
     setOutgoingFriendRequests(filterItemsByStatus(friendRequestsData.outgoing || [], friendRequestFilter));
     setIncomingAssignments(filterItemsByStatus(incomingAssignmentsData || [], incomingAssignmentFilter));
     setOutgoingAssignments(filterItemsByStatus(outgoingAssignmentsData || [], outgoingAssignmentFilter));
-    setPendingApprovalsBadge(badgeData.totalPendingApprovals || 0);
 
     await syncLiveNotifications({
       friendRequestsData,
@@ -460,7 +446,31 @@ export default function App() {
       return;
     }
 
-    initializeNotifications();
+    let isCancelled = false;
+
+    async function setupPushNotifications() {
+      await initializeNotifications();
+
+      const pushToken = await getRemotePushToken();
+      if (!pushToken || isCancelled || registeredPushTokenRef.current === pushToken) {
+        return;
+      }
+
+      try {
+        await registerPushToken(pushToken);
+        if (!isCancelled) {
+          registeredPushTokenRef.current = pushToken;
+        }
+      } catch (pushTokenError) {
+        // Keep the app usable even if push registration fails temporarily.
+      }
+    }
+
+    setupPushNotifications();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [user]);
 
   useEffect(() => {
@@ -488,6 +498,7 @@ export default function App() {
       return undefined;
     }
 
+    registeredPushTokenRef.current = null;
     notificationSnapshotRef.current = {
       isPrimed: false,
       incomingFriendRequestIds: new Set(),
@@ -531,9 +542,15 @@ export default function App() {
     setError('');
     setLoading(true);
     try {
-      const authUser = await login({ username, password });
-      setUser(authUser);
-      await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
+      await runWithActionFeedback({
+        title: 'Signing in',
+        subtitle: 'Syncing your account and daily plan.',
+        work: async () => {
+          const authUser = await login({ username, password });
+          setUser(authUser);
+          await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
+        },
+      });
     } catch (authError) {
       setError(authError.message);
     } finally {
@@ -545,11 +562,19 @@ export default function App() {
     setError('');
     setLoading(true);
     try {
-      const authUser = await register({ displayName, username, password });
-      setUser(authUser);
-      await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
+      await runWithActionFeedback({
+        title: 'Creating account',
+        subtitle: 'Preparing your DoDaily workspace.',
+        work: async () => {
+          const authUser = await register({ displayName, username, password });
+          setUser(authUser);
+          await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
+        },
+      });
+      return true;
     } catch (authError) {
       setError(authError.message);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -559,10 +584,18 @@ export default function App() {
     setError('');
     setLoading(true);
     try {
-      await createTask({ title, notes, date, time: time || '', status: 'pending' });
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: 'Adding task',
+        subtitle: 'Saving your planner task.',
+        work: async () => {
+          await createTask({ title, notes, date, time: time || '', status: 'pending' });
+          await refreshAllData();
+        },
+      });
+      return true;
     } catch (taskError) {
       setError(taskError.message);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -575,8 +608,14 @@ export default function App() {
 
     setError('');
     try {
-      await updateTask(task._id, { status: nextStatus });
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: 'Updating task',
+        subtitle: `Marking this task as ${nextStatus}.`,
+        work: async () => {
+          await updateTask(task._id, { status: nextStatus });
+          await refreshAllData();
+        },
+      });
     } catch (taskError) {
       setError(taskError.message);
     }
@@ -585,8 +624,14 @@ export default function App() {
   const setTaskStatus = async (task, status) => {
     setError('');
     try {
-      await updateTask(task._id, { status });
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: status === 'completed' ? 'Completing task' : status === 'partial' ? 'Updating task' : 'Reopening task',
+        subtitle: `Changing task status to ${status}.`,
+        work: async () => {
+          await updateTask(task._id, { status });
+          await refreshAllData();
+        },
+      });
     } catch (taskError) {
       setError(taskError.message);
     } finally {
@@ -597,8 +642,14 @@ export default function App() {
   const removeTask = async (taskId) => {
     setError('');
     try {
-      await deleteTaskById(taskId);
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: 'Deleting task',
+        subtitle: 'Removing this planner task.',
+        work: async () => {
+          await deleteTaskById(taskId);
+          await refreshAllData();
+        },
+      });
     } catch (taskError) {
       setError(taskError.message);
     }
@@ -619,10 +670,18 @@ export default function App() {
     setError('');
     setLoading(true);
     try {
-      await createReminder({ title, time: trimmedTime, notes, date });
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: 'Adding reminder',
+        subtitle: 'Scheduling your reminder.',
+        work: async () => {
+          await createReminder({ title, time: trimmedTime, notes, date });
+          await refreshAllData();
+        },
+      });
+      return true;
     } catch (reminderError) {
       setError(reminderError.message);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -631,8 +690,14 @@ export default function App() {
   const toggleReminderDone = async (reminder) => {
     setError('');
     try {
-      await updateReminder(reminder._id, { done: !reminder.done });
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: reminder.done ? 'Reopening reminder' : 'Completing reminder',
+        subtitle: 'Updating reminder status.',
+        work: async () => {
+          await updateReminder(reminder._id, { done: !reminder.done });
+          await refreshAllData();
+        },
+      });
     } catch (reminderError) {
       setError(reminderError.message);
     }
@@ -641,8 +706,14 @@ export default function App() {
   const removeReminder = async (reminderId) => {
     setError('');
     try {
-      await deleteReminder(reminderId);
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: 'Deleting reminder',
+        subtitle: 'Removing this reminder.',
+        work: async () => {
+          await deleteReminder(reminderId);
+          await refreshAllData();
+        },
+      });
     } catch (reminderError) {
       setError(reminderError.message);
     }
@@ -651,8 +722,14 @@ export default function App() {
   const setReminderDone = async (reminder, done) => {
     setError('');
     try {
-      await updateReminder(reminder._id, { done });
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: done ? 'Completing reminder' : 'Reopening reminder',
+        subtitle: 'Updating reminder status.',
+        work: async () => {
+          await updateReminder(reminder._id, { done });
+          await refreshAllData();
+        },
+      });
     } catch (reminderError) {
       setError(reminderError.message);
     } finally {
@@ -672,16 +749,24 @@ export default function App() {
     setError('');
     setLoading(true);
     try {
-      await sendFriendRequest({ username: friendUsernameInput.trim() });
+      await runWithActionFeedback({
+        title: 'Sending request',
+        subtitle: 'Sending your friend request.',
+        work: async () => {
+          await sendFriendRequest({ username: friendUsernameInput.trim() });
+        },
+      });
       setFriendUsernameInput('');
       setShowAddFriendModal(false);
       await refreshAllData();
+      return true;
     } catch (friendError) {
       if (isMailVerificationRequired(friendError)) {
         showMailVerificationPopup();
-        return;
+        return false;
       }
       setError(friendError.message);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -694,8 +779,14 @@ export default function App() {
     }
     setError('');
     try {
-      await respondFriendRequest(requestId, action);
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: action === 'approve' ? 'Approving request' : 'Rejecting request',
+        subtitle: 'Updating this friend request.',
+        work: async () => {
+          await respondFriendRequest(requestId, action);
+          await refreshAllData();
+        },
+      });
     } catch (friendError) {
       if (isMailVerificationRequired(friendError)) {
         showMailVerificationPopup();
@@ -705,11 +796,17 @@ export default function App() {
     }
   };
 
-  const answerAssignment = async (assignmentId, action) => {
+  const answerAssignment = async (assignmentId, action, itemType) => {
     setError('');
     try {
-      await respondAssignment(assignmentId, action);
-      await refreshAllData();
+      await runWithActionFeedback({
+        title: action === 'approve' ? `Approving ${itemType}` : `Rejecting ${itemType}`,
+        subtitle: `Updating this ${itemType} request.`,
+        work: async () => {
+          await respondAssignment(assignmentId, action);
+          await refreshAllData();
+        },
+      });
     } catch (assignmentError) {
       setError(assignmentError.message);
     }
@@ -746,17 +843,23 @@ export default function App() {
     setLoading(true);
     try {
       const sender = type === 'task' ? sendTaskToFriend : sendReminderToFriend;
-      await Promise.all(
-        selectedFriendIds.map((friendId) =>
-          sender({
-            toUserId: friendId,
-            title: shareTitleInput.trim(),
-            notes: shareNotesInput.trim(),
-            date: shareDateInput.trim(),
-            time: shareTimeInput.trim(),
-          })
-        )
-      );
+      await runWithActionFeedback({
+        title: type === 'task' ? 'Sending planner' : 'Sending reminder',
+        subtitle: 'Sharing it with your selected friends.',
+        work: async () => {
+          await Promise.all(
+            selectedFriendIds.map((friendId) =>
+              sender({
+                toUserId: friendId,
+                title: shareTitleInput.trim(),
+                notes: shareNotesInput.trim(),
+                date: shareDateInput.trim(),
+                time: shareTimeInput.trim(),
+              })
+            )
+          );
+        },
+      });
       setShareTitleInput('');
       setShareNotesInput('');
       setShareTimeInput('');
@@ -798,12 +901,41 @@ export default function App() {
     setError('');
     setSavingProfile(true);
     try {
-      const updatedUser = await updateMe({ displayName: displayNameInput });
+      const updatedUser = await runWithActionFeedback({
+        title: 'Saving profile',
+        subtitle: 'Updating your display name.',
+        work: async () => updateMe({ displayName: displayNameInput }),
+      });
       setUser(updatedUser);
+      return true;
     } catch (profileError) {
       setError(profileError.message);
+      return false;
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  const handleVerifyEmail = async (email) => {
+    setError('');
+    setVerifyingEmail(true);
+    try {
+      await runWithActionFeedback({
+        title: 'Sending verification',
+        subtitle: 'Updating your Gmail and sending the verification link.',
+        work: async () => {
+          const updatedUser = await updateMe({ email });
+          setUser(updatedUser);
+          await sendVerificationEmail();
+        },
+      });
+      Alert.alert('Verification Email Sent', 'Check your Gmail inbox for the verification link.');
+      return true;
+    } catch (verificationError) {
+      setError(verificationError.message || 'Failed to send verification email');
+      return false;
+    } finally {
+      setVerifyingEmail(false);
     }
   };
 
@@ -811,7 +943,23 @@ export default function App() {
     setError('');
     setLoggingOut(true);
     try {
-      await logout();
+      await runWithActionFeedback({
+        title: 'Logging out',
+        subtitle: 'Closing this session on your device.',
+        work: async () => {
+          const currentPushToken = registeredPushTokenRef.current;
+          if (currentPushToken) {
+            try {
+              await unregisterPushToken(currentPushToken);
+            } catch (pushTokenError) {
+              // Ignore push token removal errors and continue with logout.
+            }
+          }
+
+          await logout();
+        },
+      });
+      registeredPushTokenRef.current = null;
       clearReminderNotifications();
       setUser(null);
       setAuthScreen('login');
@@ -882,14 +1030,16 @@ export default function App() {
       return;
     }
 
-    await handleCreateTask({
+    const didCreateTask = await handleCreateTask({
       title: taskTitleInput.trim(),
       notes: taskNotesInput.trim(),
       date: selectedDate,
       time: taskTimeInput,
     });
 
-    setShowPlannerTaskModal(false);
+    if (didCreateTask) {
+      setShowPlannerTaskModal(false);
+    }
   };
 
   const submitReminderModal = async () => {
@@ -903,14 +1053,16 @@ export default function App() {
       return;
     }
 
-    await handleCreateReminder({
+    const didCreateReminder = await handleCreateReminder({
       title: reminderTitleInput.trim(),
       notes: reminderNotesInput.trim(),
       date: selectedDate,
       time: reminderTimeInput,
     });
 
-    setShowReminderModal(false);
+    if (didCreateReminder) {
+      setShowReminderModal(false);
+    }
   };
 
   const openAddFriendModal = () => {
@@ -966,11 +1118,18 @@ export default function App() {
         <View style={styles.bgOrbTop} />
         <View style={styles.bgOrbBottom} />
         <View style={styles.authWrap}>
+          <View style={styles.authHeroCard}>
+            <Text style={styles.authHeroEyebrow}>DoDaily</Text>
+            <Text style={styles.authHeroTitle}>Plan better.{"\n"}Remember calmly.</Text>
+            <Text style={styles.authHeroSubtitle}>
+              A cleaner space for planners, reminders, friends, approvals, and timely alerts.
+            </Text>
+          </View>
           {authScreen === 'login' ? (
-            <LoginScreen
-              onLogin={handleLogin}
-              loading={loading}
-              error={error}
+          <LoginScreen
+            onLogin={handleLogin}
+            loading={loading}
+            error={error}
               onGoToSignup={() => {
                 setError('');
                 setAuthScreen('signup');
@@ -988,6 +1147,11 @@ export default function App() {
             />
           )}
         </View>
+        <ActionStatusModal
+          visible={actionStatus.visible}
+          title={actionStatus.title}
+          subtitle={actionStatus.subtitle}
+        />
         <StatusBar style="dark" />
       </SafeAreaView>
     );
@@ -1001,20 +1165,7 @@ export default function App() {
       <View style={styles.bgOrbTop} />
       <View style={styles.bgOrbBottom} />
       <View style={styles.container}>
-        <View style={styles.headerCard}>
-          <View>
-            <Text style={styles.welcomeTitle}>{welcomeText}</Text>
-            <Text style={styles.subtitle}>
-              {activeTab === 'planner'
-                ? 'Date-wise planner overview'
-                : activeTab === 'reminders'
-                  ? 'Your personal reminders'
-                  : activeTab === 'friends'
-                    ? 'Friends, requests and approvals'
-                  : 'Manage your profile details'}
-            </Text>
-          </View>
-        </View>
+          
 
         {activeTab === 'planner' || activeTab === 'reminders' ? (
           <>
@@ -1047,16 +1198,23 @@ export default function App() {
           </>
         ) : null}
 
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        {error ? (
+          <View style={styles.errorBanner}>
+            <MaterialCommunityIcons name="alert-circle-outline" size={16} color="#9a1f1f" />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        ) : null}
 
         {activeTab === 'planner' ? (
           <PlannerTabScreen
             statusCounts={statusCounts}
+            incomingPlannerAssignments={incomingPlannerAssignments}
             roadmapTasks={roadmapTasks}
             unmanagedTasks={unmanagedTasks}
             user={user}
             normalizeTaskStatus={normalizeTaskStatus}
             cycleTaskStatus={cycleTaskStatus}
+            onAnswerIncomingPlanner={(assignmentId, action) => answerAssignment(assignmentId, action, 'planner')}
             onOpenTaskActions={setActiveTaskActionItem}
             onOpenCreateTask={openPlannerTaskModal}
           />
@@ -1065,8 +1223,10 @@ export default function App() {
         {activeTab === 'reminders' ? (
           <RemindersTabScreen
             reminderCounts={reminderCounts}
+            incomingReminderAssignments={incomingReminderAssignments}
             sortedReminders={sortedReminders}
             user={user}
+            onAnswerIncomingReminder={(assignmentId, action) => answerAssignment(assignmentId, action, 'reminder')}
             onToggleReminderDone={toggleReminderDone}
             onOpenReminderActions={setActiveReminderActionItem}
             onOpenCreateReminder={openReminderModal}
@@ -1093,19 +1253,7 @@ export default function App() {
             savingProfile={savingProfile}
             handleLogout={handleLogout}
             loggingOut={loggingOut}
-            onVerifyEmail={async (email) => {
-              setVerifyingEmail(true);
-              try {
-                const updatedUser = await updateMe({ email });
-                setUser(updatedUser);
-                await sendVerificationEmail();
-                setError('Verification email sent!');
-              } catch (e) {
-                setError(e.message || 'Failed to send verification email');
-              } finally {
-                setVerifyingEmail(false);
-              }
-            }}
+            onVerifyEmail={handleVerifyEmail}
             verifyingEmail={verifyingEmail}
           />
         ) : null}
@@ -1113,6 +1261,8 @@ export default function App() {
         <BottomNav
           activeTab={activeTab}
           onChangeTab={setActiveTab}
+          showPlannerRequestDot={incomingPlannerAssignments.length > 0}
+          showReminderRequestDot={incomingReminderAssignments.length > 0}
           showFriendRequestDot={incomingFriendRequests.length > 0}
         />
       </View>
@@ -1246,7 +1396,7 @@ export default function App() {
                 <Text style={styles.settingsCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.settingsSaveButton} onPress={submitPlannerTaskModal} disabled={loading}>
-                <Text style={styles.settingsSaveText}>{loading ? 'Saving...' : 'Add Task'}</Text>
+                <Text style={styles.settingsSaveText}>{loading ? 'Adding...' : 'Add Task'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1349,7 +1499,7 @@ export default function App() {
                 <Text style={styles.settingsCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.settingsSaveButton} onPress={submitReminderModal} disabled={loading}>
-                <Text style={styles.settingsSaveText}>{loading ? 'Saving...' : 'Add Reminder'}</Text>
+                <Text style={styles.settingsSaveText}>{loading ? 'Adding...' : 'Add Reminder'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1486,9 +1636,11 @@ export default function App() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCardLarge}>
-            <Text style={styles.modalTitle}>Friend Requests & Approvals</Text>
+            <Text style={styles.modalTitle}>Friend Requests</Text>
             <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.sectionMiniTitle}>Incoming Friend Requests</Text>
+              {incomingFriendRequests.length > 0 ? (
+                <Text style={styles.sectionMiniTitle}>Incoming Friend Requests</Text>
+              ) : null}
               {incomingFriendRequests.length === 0 ? <Text style={styles.emptyText}>No incoming friend requests.</Text> : null}
               {incomingFriendRequests.map((request) => (
                 <View key={request._id} style={styles.requestRow}>
@@ -1505,25 +1657,6 @@ export default function App() {
                   ) : (
                     <Text style={styles.friendSecondary}>Status: {request.status}</Text>
                   )}
-                </View>
-              ))}
-
-              <Text style={styles.sectionMiniTitle}>Incoming Planner/Reminder Approval Requests</Text>
-              {incomingAssignments.length === 0 ? <Text style={styles.emptyText}>No incoming item approvals.</Text> : null}
-              {incomingAssignments.map((item) => (
-                <View key={item._id} style={styles.requestRow}>
-                  <Text style={styles.friendPrimary}>
-                    {item.fromUser.displayName} sent {item.itemType}: {item.title}
-                  </Text>
-                  <Text style={styles.friendSecondary}>Date: {item.date}{item.time ? ` | Time: ${item.time}` : ''}</Text>
-                  <View style={styles.requestActions}>
-                    <TouchableOpacity style={styles.approveBtn} onPress={() => answerAssignment(item._id, 'approve')}>
-                      <Text style={styles.approveText}>Approve</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.rejectBtn} onPress={() => answerAssignment(item._id, 'reject')}>
-                      <Text style={styles.rejectText}>Reject</Text>
-                    </TouchableOpacity>
-                  </View>
                 </View>
               ))}
             </ScrollView>
@@ -1604,8 +1737,8 @@ export default function App() {
               <TouchableOpacity style={styles.settingsCancelButton} onPress={() => setShowFriendShareModal(false)}>
                 <Text style={styles.settingsCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.settingsSaveButton} onPress={() => sendSharedItem(friendShareType)}>
-                <Text style={styles.settingsSaveText}>Send For Approval</Text>
+              <TouchableOpacity style={styles.settingsSaveButton} onPress={() => sendSharedItem(friendShareType)} disabled={loading}>
+                <Text style={styles.settingsSaveText}>{loading ? 'Sending...' : 'Send For Approval'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1743,6 +1876,12 @@ export default function App() {
         />
       ) : null}
 
+      <ActionStatusModal
+        visible={actionStatus.visible}
+        title={actionStatus.title}
+        subtitle={actionStatus.subtitle}
+      />
+
       <StatusBar style="dark" />
     </SafeAreaView>
   );
@@ -1751,32 +1890,64 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f3f7f4',
+    backgroundColor: '#eef5f1',
   },
   bgOrbTop: {
     position: 'absolute',
-    top: -100,
-    right: -50,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: '#c7f3de',
-    opacity: 0.82,
+    top: -120,
+    right: -40,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: '#cbeee1',
+    opacity: 0.9,
   },
   bgOrbBottom: {
     position: 'absolute',
-    bottom: -140,
-    left: -60,
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: '#ffe4b8',
-    opacity: 0.74,
+    bottom: -150,
+    left: -70,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: '#fbe2bb',
+    opacity: 0.72,
   },
   authWrap: {
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 18,
+  },
+  authHeroCard: {
+    borderRadius: 28,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    marginBottom: 16,
+    backgroundColor: 'rgba(11, 92, 88, 0.94)',
+    shadowColor: '#103733',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  authHeroEyebrow: {
+    color: '#d6f2ea',
+    fontWeight: '800',
+    letterSpacing: 1,
+    fontSize: 12,
+    textTransform: 'uppercase',
+  },
+  authHeroTitle: {
+    color: '#ffffff',
+    fontSize: 30,
+    fontWeight: '800',
+    lineHeight: 36,
+    marginTop: 8,
+  },
+  authHeroSubtitle: {
+    color: '#d9efeb',
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 8,
   },
   loaderWrap: {
     flex: 1,
@@ -1905,26 +2076,64 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   headerCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 20,
+    backgroundColor: '#0f6f6b',
+    borderRadius: 24,
     paddingVertical: 16,
     paddingHorizontal: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#d4ece3',
+    marginBottom: 14,
+    shadowColor: '#0c4d48',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  headerCardTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 12,
+  },
+  headerBadge: {
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
+  },
+  headerBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  headerDatePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  headerDateText: {
+    color: '#e7f7f3',
+    fontWeight: '700',
+    fontSize: 12,
+    marginLeft: 6,
+  },
+  headerTextWrap: {
+    maxWidth: '92%',
   },
   welcomeTitle: {
     fontSize: 24,
     fontWeight: '800',
-    color: '#173238',
+    color: '#ffffff',
   },
   subtitle: {
     fontSize: 13,
-    color: '#4f6664',
-    marginTop: 4,
+    color: '#dcefeb',
+    marginTop: 6,
+    lineHeight: 19,
   },
   settingsCancelButton: {
     borderWidth: 1,
@@ -1970,11 +2179,16 @@ const styles = StyleSheet.create({
   },
   modalCardLarge: {
     backgroundColor: '#ffffff',
-    borderRadius: 18,
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: '#d4ece3',
-    padding: 14,
+    borderColor: '#d7e9e3',
+    padding: 16,
     maxHeight: '78%',
+    shadowColor: '#163632',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
   },
   selectFriendsButton: {
     marginTop: 4,
@@ -2192,9 +2406,9 @@ const styles = StyleSheet.create({
   actionsMenu: {
     marginTop: 8,
     borderWidth: 1,
-    borderColor: '#d4ece3',
-    borderRadius: 12,
-    backgroundColor: '#f9fdfb',
+    borderColor: '#dcebe6',
+    borderRadius: 14,
+    backgroundColor: '#fbfdfc',
     overflow: 'hidden',
   },
   actionOption: {
@@ -2271,37 +2485,37 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#9a1f1f',
-    marginBottom: 8,
-    fontWeight: '600',
+    fontWeight: '700',
+    marginLeft: 8,
   },
-  addFloatingButton: {
-    position: 'absolute',
-    left: 4,
-    bottom: 16,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#0d7a76',
+  errorBanner: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0d4f4a',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 7,
+    backgroundColor: '#fff2f1',
+    borderWidth: 1,
+    borderColor: '#f1c4be',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginBottom: 10,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(16, 35, 33, 0.35)',
+    backgroundColor: 'rgba(16, 35, 33, 0.42)',
     justifyContent: 'center',
     paddingHorizontal: 18,
   },
   modalCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 18,
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: '#d4ece3',
-    padding: 14,
+    borderColor: '#d7e9e3',
+    padding: 16,
+    shadowColor: '#163632',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
   },
   modalTitle: {
     fontSize: 18,
@@ -2324,6 +2538,13 @@ const styles = StyleSheet.create({
   timePickerText: {
     color: '#2e5d58',
     fontWeight: '700',
+  },
+  emptyText: {
+    color: '#5f736f',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 14,
+    marginBottom: 8,
   },
   clearTimeButton: {
     alignSelf: 'flex-start',

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Modal, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+
+import HapticTouchable from '../components/HapticTouchable';
+
+const TouchableOpacity = HapticTouchable;
 
 export default function SettingsTabScreen({
   user,
@@ -38,8 +42,10 @@ export default function SettingsTabScreen({
   };
 
   const submitDisplayName = async () => {
-    await saveProfile();
-    setEditMode(false);
+    const didSave = await saveProfile();
+    if (didSave) {
+      setEditMode(false);
+    }
   };
 
   const submitEmailVerification = async () => {
@@ -51,8 +57,10 @@ export default function SettingsTabScreen({
       return;
     }
 
-    await onVerifyEmail(trimmedEmail);
-    setShowEmailModal(false);
+    const didSend = await onVerifyEmail(trimmedEmail);
+    if (didSend) {
+      setShowEmailModal(false);
+    }
   };
 
   return (

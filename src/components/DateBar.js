@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+
+import HapticTouchable from './HapticTouchable';
+
+const TouchableOpacity = HapticTouchable;
 
 function toISODate(date) {
   const year = date.getFullYear();
@@ -43,15 +47,22 @@ export default function DateBar({ selectedDate, onSelectDate, onOpenPicker }) {
       return;
     }
 
-    const CHIP_WITH_GAP = 78;
+    const chipWithGap = 72;
     scrollRef.current.scrollTo({
-      x: selectedIndex * CHIP_WITH_GAP,
+      x: selectedIndex * chipWithGap,
       animated: true,
     });
   }, [dates, selectedDate]);
 
   return (
-    <View style={styles.dateBarWrap}>
+    <View style={styles.dateBarCard}>
+      <View style={styles.dateBarHeader}>
+        <Text style={styles.dateBarEyebrow}>Pick a day</Text>
+        <TouchableOpacity style={styles.calendarButton} onPress={onOpenPicker}>
+          <MaterialCommunityIcons name="calendar-month-outline" size={19} color="#0f6e68" />
+        </TouchableOpacity>
+      </View>
+
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -72,58 +83,83 @@ export default function DateBar({ selectedDate, onSelectDate, onOpenPicker }) {
           );
         })}
       </ScrollView>
-
-      <TouchableOpacity style={styles.calendarButton} onPress={onOpenPicker}>
-        <MaterialCommunityIcons name="calendar-month-outline" size={20} color="#0f6e68" />
-      </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  dateBarWrap: {
+  dateBarCard: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderWidth: 1,
+    borderColor: '#d7e9e3',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+    shadowColor: '#163632',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  dateBarHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  dateBarEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#446763',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
   dateScrollContent: {
     paddingRight: 8,
   },
   dateChip: {
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f7fbf9',
     borderWidth: 1,
-    borderColor: '#d4ece3',
+    borderColor: '#dceae5',
     borderRadius: 14,
     paddingVertical: 8,
     paddingHorizontal: 10,
     marginRight: 8,
-    width: 70,
+    width: 64,
     alignItems: 'center',
   },
   dateChipActive: {
     backgroundColor: '#0d7a76',
     borderColor: '#0d7a76',
+    shadowColor: '#0b5c58',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    elevation: 4,
   },
   dateChipDay: {
-    fontSize: 11,
-    color: '#446360',
-    fontWeight: '700',
+    fontSize: 10,
+    color: '#567673',
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
   dateChipDate: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#193733',
-    fontWeight: '700',
+    fontWeight: '800',
+    marginTop: 2,
   },
   dateChipTextActive: {
     color: '#ffffff',
   },
   calendarButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 34,
+    height: 34,
+    borderRadius: 11,
     borderWidth: 1,
-    borderColor: '#c7e0d9',
-    backgroundColor: '#eaf8f4',
+    borderColor: '#cfe4dd',
+    backgroundColor: '#eef8f4',
     justifyContent: 'center',
     alignItems: 'center',
   },

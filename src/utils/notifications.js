@@ -1,4 +1,6 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 
 import { parseClockTime } from './time';
@@ -7,6 +9,7 @@ const ALERT_CHANNEL_ID = 'planner-alerts';
 const REMINDER_NOTIFICATION_TYPE = 'reminder-alarm';
 
 let permissionPromise;
+let pushTokenPromise;
 
 function isSupportedPlatform() {
   return Platform.OS === 'android' || Platform.OS === 'ios';
@@ -110,6 +113,44 @@ function getImmediateTrigger() {
 
 export async function initializeNotifications() {
   return ensureNotificationPermission();
+}
+
+function getProjectId() {
+  return (
+    Constants?.expoConfig?.extra?.eas?.projectId ||
+    Constants?.easConfig?.projectId ||
+    null
+  );
+}
+
+export async function getRemotePushToken() {
+  if (!isSupportedPlatform() || !Device.isDevice) {
+    return null;
+  }
+
+  const isGranted = await ensureNotificationPermission();
+  if (!isGranted) {
+    return null;
+  }
+
+  if (!pushTokenPromise) {
+    pushTokenPromise = (async () => {
+      const projectId = getProjectId();
+      if (!projectId) {
+        return null;
+      }
+
+      try {
+        const response = await Notifications.getExpoPushTokenAsync({ projectId });
+        return response?.data || null;
+      } catch (error) {
+        pushTokenPromise = null;
+        return null;
+      }
+    })();
+  }
+
+  return pushTokenPromise;
 }
 
 export async function showImmediateNotification({ title, body, data = {} }) {

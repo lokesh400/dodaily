@@ -37,3 +37,17 @@ export function updateMe(payload) {
     body: JSON.stringify(payload),
   });
 }
+
+export function registerPushToken(pushToken) {
+  return apiRequest('/api/auth/push-token', {
+    method: 'POST',
+    body: JSON.stringify({ pushToken }),
+  });
+}
+
+export function unregisterPushToken(pushToken) {
+  return apiRequest('/api/auth/push-token', {
+    method: 'DELETE',
+    body: JSON.stringify({ pushToken }),
+  });
+}

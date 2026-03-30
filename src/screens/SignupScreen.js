@@ -1,6 +1,10 @@
 import { useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+
+import HapticTouchable from '../components/HapticTouchable';
+
+const TouchableOpacity = HapticTouchable;
 
 export default function SignupScreen({ onSignup, loading, error, onGoToLogin }) {
   const [displayName, setDisplayName] = useState('');
@@ -10,46 +14,58 @@ export default function SignupScreen({ onSignup, loading, error, onGoToLogin }) 
 
   return (
     <View style={styles.card}>
-      <Text style={styles.eyebrow}>Daily Planner</Text>
-      <Text style={styles.title}>Create Account</Text>
-      <Text style={styles.subtitle}>Sign up and start managing your day</Text>
+      <View style={styles.badgeRow}>
+        <View style={styles.badgeDot} />
+        <Text style={styles.eyebrow}>DoDaily</Text>
+      </View>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Display name"
-        placeholderTextColor="#6f7f86"
-        value={displayName}
-        onChangeText={setDisplayName}
-      />
+      <Text style={styles.title}>Create account</Text>
+      <Text style={styles.subtitle}>
+        Build your routine, invite friends, and stay on top of reminders from one calm workspace.
+      </Text>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Username"
-        placeholderTextColor="#6f7f86"
-        autoCapitalize="none"
-        value={username}
-        onChangeText={setUsername}
-      />
-
-      <View style={styles.passwordWrap}>
+      <View style={styles.fieldWrap}>
+        <Text style={styles.fieldLabel}>Display Name</Text>
         <TextInput
-          style={[styles.input, styles.inputWithIcon]}
-          placeholder="Password"
+          style={styles.input}
+          placeholder="Enter display name"
           placeholderTextColor="#6f7f86"
-          secureTextEntry={!showPassword}
-          value={password}
-          onChangeText={setPassword}
+          value={displayName}
+          onChangeText={setDisplayName}
         />
-        <TouchableOpacity
-          style={styles.eyeButton}
-          onPress={() => setShowPassword((previous) => !previous)}
-        >
-          <MaterialCommunityIcons
-            name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-            size={22}
-            color="#2c6e63"
+      </View>
+
+      <View style={styles.fieldWrap}>
+        <Text style={styles.fieldLabel}>Username</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Choose username"
+          placeholderTextColor="#6f7f86"
+          autoCapitalize="none"
+          value={username}
+          onChangeText={setUsername}
+        />
+      </View>
+
+      <View style={styles.fieldWrap}>
+        <Text style={styles.fieldLabel}>Password</Text>
+        <View style={styles.passwordWrap}>
+          <TextInput
+            style={[styles.input, styles.inputWithIcon]}
+            placeholder="Create password"
+            placeholderTextColor="#6f7f86"
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
           />
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.eyeButton} onPress={() => setShowPassword((previous) => !previous)}>
+            <MaterialCommunityIcons
+              name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+              size={22}
+              color="#2c6e63"
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -59,7 +75,7 @@ export default function SignupScreen({ onSignup, loading, error, onGoToLogin }) 
         disabled={loading}
         onPress={() => onSignup({ displayName, username, password })}
       >
-        <Text style={styles.primaryButtonLabel}>{loading ? 'Please wait...' : 'Sign Up'}</Text>
+        <Text style={styles.primaryButtonLabel}>{loading ? 'Creating Account...' : 'Sign Up'}</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.switchLinkButton} onPress={onGoToLogin}>
@@ -72,37 +88,66 @@ export default function SignupScreen({ onSignup, loading, error, onGoToLogin }) 
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: 'rgba(255,255,255,0.94)',
-    borderRadius: 24,
-    padding: 20,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderRadius: 30,
+    padding: 24,
     borderWidth: 1,
-    borderColor: '#d4ece3',
+    borderColor: '#dceee8',
+    shadowColor: '#15443f',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  badgeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#1fa88d',
+    marginRight: 8,
   },
   eyebrow: {
     color: '#23776c',
-    fontWeight: '700',
-    marginBottom: 8,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+    fontSize: 12,
+    textTransform: 'uppercase',
   },
   title: {
     fontSize: 34,
     fontWeight: '800',
-    marginBottom: 8,
+    marginBottom: 6,
     color: '#173238',
   },
   subtitle: {
     fontSize: 15,
     color: '#4e6664',
-    marginBottom: 18,
+    marginBottom: 20,
+    lineHeight: 22,
+  },
+  fieldWrap: {
+    marginBottom: 12,
+  },
+  fieldLabel: {
+    color: '#295a53',
+    fontWeight: '700',
+    fontSize: 13,
+    marginBottom: 7,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#c7dfd7',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginBottom: 12,
+    borderColor: '#cfe3dc',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     backgroundColor: '#f9fdfb',
     color: '#173238',
+    fontSize: 15,
   },
   passwordWrap: {
     position: 'relative',
@@ -113,30 +158,31 @@ const styles = StyleSheet.create({
   eyeButton: {
     position: 'absolute',
     right: 12,
-    top: 13,
+    top: 14,
   },
   primaryButton: {
     backgroundColor: '#0d7a76',
-    paddingVertical: 12,
-    borderRadius: 12,
+    paddingVertical: 15,
+    borderRadius: 16,
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: 8,
     marginBottom: 12,
   },
   primaryButtonLabel: {
     color: '#ffffff',
     fontWeight: '800',
-    fontSize: 15,
+    fontSize: 16,
+    letterSpacing: 0.3,
   },
   switchLinkButton: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#c6e2db',
+    borderColor: '#d5e7e1',
     borderRadius: 999,
-    paddingVertical: 10,
-    backgroundColor: '#f4fbf8',
+    paddingVertical: 12,
+    backgroundColor: '#f5fbf9',
   },
   switchLinkText: {
     color: '#4e6664',
