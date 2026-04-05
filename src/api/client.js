@@ -1,5 +1,3 @@
-import { Platform } from 'react-native';
-
 const API_BASE_URL = "https://dodaily.onrender.com"
 
 // const API_BASE_URL = "http://10.60.96.198:4000";
@@ -23,7 +21,7 @@ export async function apiRequest(path, options = {}) {
       ...options,
     });
   } catch (error) {
-    throw createApiError('Could not reach the server. Check that your phone and server are on the same network.', {
+    throw createApiError('No internet connection. You can browse cached data, but syncing changes requires going online.', {
       status: 0,
       isNetworkError: true,
       cause: error,

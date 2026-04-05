@@ -1,4 +1,4 @@
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import HapticTouchable from '../components/HapticTouchable';
@@ -24,163 +24,160 @@ export default function PlannerTabScreen({
 
   return (
     <View style={screenStyles.domainArea}>
-      <View style={screenStyles.summaryRow}>
-        <View style={[screenStyles.summaryCard, screenStyles.pendingCard]}>
-          <Text style={screenStyles.summaryCount}>{statusCounts.pending}</Text>
-          <Text style={screenStyles.summaryLabel}>Pending</Text>
-        </View>
-        <View style={[screenStyles.summaryCard, screenStyles.partialCard]}>
-          <Text style={screenStyles.summaryCount}>{statusCounts.partial}</Text>
-          <Text style={screenStyles.summaryLabel}>Partial</Text>
-        </View>
-        <View style={[screenStyles.summaryCard, screenStyles.completedCard]}>
-          <Text style={screenStyles.summaryCount}>{statusCounts.completed}</Text>
-          <Text style={screenStyles.summaryLabel}>Completed</Text>
-        </View>
-      </View>
-
-      {incomingPlannerAssignments.length > 0 ? (
-        <>
-          <Text style={screenStyles.sectionHeading}>Incoming Planner Requests</Text>
-          <View style={screenStyles.approvalList}>
-            {incomingPlannerAssignments.map((item) => (
-              <View key={item._id} style={screenStyles.approvalCard}>
-                <View style={screenStyles.approvalHeaderRow}>
-                  <Text style={screenStyles.approvalTitle}>{item.title}</Text>
-                  <View style={screenStyles.approvalBadge}>
-                    <Text style={screenStyles.approvalBadgeText}>Needs Approval</Text>
-                  </View>
-                </View>
-                <Text style={screenStyles.approvalMeta}>
-                  From {item.fromUser?.displayName || item.fromUser?.username || 'Friend'}
-                </Text>
-                <Text style={screenStyles.approvalMeta}>
-                  Date: {item.date}
-                  {item.time ? ` | Time: ${item.time}` : ''}
-                </Text>
-                {item.notes ? <Text style={screenStyles.approvalNotes}>{item.notes}</Text> : null}
-                <View style={screenStyles.approvalActions}>
-                  <TouchableOpacity
-                    style={screenStyles.approvalApproveButton}
-                    onPress={() => onAnswerIncomingPlanner(item._id, 'approve')}
-                  >
-                    <Text style={screenStyles.approvalApproveText}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={screenStyles.approvalRejectButton}
-                    onPress={() => onAnswerIncomingPlanner(item._id, 'reject')}
-                  >
-                    <Text style={screenStyles.approvalRejectText}>Reject</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={screenStyles.content}
+      >
+        <View style={screenStyles.summaryRow}>
+          <View style={[screenStyles.summaryCard, screenStyles.pendingCard]}>
+            <Text style={screenStyles.summaryCount}>{statusCounts.pending}</Text>
+            <Text style={screenStyles.summaryLabel}>Pending</Text>
           </View>
-        </>
-      ) : null}
-
-      {roadmapTasks.length > 0 ? (
-        <>
-          <Text style={screenStyles.sectionHeading}>Roadmap Tasks</Text>
-          <FlatList
-            data={roadmapTasks}
-            keyExtractor={(item) => item._id}
-            contentContainerStyle={screenStyles.listContent}
-            scrollEnabled={false}
-            renderItem={({ item }) => {
-              const status = normalizeTaskStatus(item);
-              const createdByName =
-                item.createdBy && String(item.createdBy._id || '') !== String(user.id || user._id || '')
-                  ? item.createdBy.displayName || item.createdBy.username
-                  : '';
-
-              return (
-                <View style={screenStyles.taskRow}>
-                  <View style={screenStyles.taskMain}>
-                    <View style={screenStyles.roadmapTopRow}>
-                      <Text style={screenStyles.taskTitle}>{item.title}</Text>
-                      <Text style={screenStyles.taskTimeBadge}>{item.time}</Text>
-                    </View>
-                    {item.notes ? <Text style={screenStyles.taskMeta}>{item.notes}</Text> : null}
-                    {createdByName ? <Text style={screenStyles.createdByTag}>Created by {createdByName}</Text> : null}
-                    <TouchableOpacity
-                      style={[
-                        screenStyles.statusPill,
-                        status === 'completed'
-                          ? screenStyles.completedCard
-                          : status === 'partial'
-                            ? screenStyles.partialCard
-                            : screenStyles.pendingCard,
-                      ]}
-                      onPress={() => cycleTaskStatus(item)}
-                    >
-                      <Text style={screenStyles.statusPillText}>Status: {status}</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <TouchableOpacity style={screenStyles.actionsIconButton} onPress={() => onOpenTaskActions(item)}>
-                    <MaterialCommunityIcons name="dots-horizontal" size={18} color="#2f635c" />
-                  </TouchableOpacity>
-                </View>
-              );
-            }}
-          />
-        </>
-      ) : null}
-
-      {unmanagedTasks.length > 0 ? (
-        <>
-          <Text style={screenStyles.sectionHeading}>Unmanaged Tasks</Text>
-          <FlatList
-            data={unmanagedTasks}
-            keyExtractor={(item) => item._id}
-            contentContainerStyle={screenStyles.listContent}
-            scrollEnabled={false}
-            renderItem={({ item }) => {
-              const status = normalizeTaskStatus(item);
-              const createdByName =
-                item.createdBy && String(item.createdBy._id || '') !== String(user.id || user._id || '')
-                  ? item.createdBy.displayName || item.createdBy.username
-                  : '';
-
-              return (
-                <View style={screenStyles.taskRow}>
-                  <View style={screenStyles.taskMain}>
-                    <Text style={screenStyles.taskTitle}>{item.title}</Text>
-                    {item.notes ? <Text style={screenStyles.taskMeta}>{item.notes}</Text> : null}
-                    {createdByName ? <Text style={screenStyles.createdByTag}>Created by {createdByName}</Text> : null}
-                    <TouchableOpacity
-                      style={[
-                        screenStyles.statusPill,
-                        status === 'completed'
-                          ? screenStyles.completedCard
-                          : status === 'partial'
-                            ? screenStyles.partialCard
-                            : screenStyles.pendingCard,
-                      ]}
-                      onPress={() => cycleTaskStatus(item)}
-                    >
-                      <Text style={screenStyles.statusPillText}>Status: {status}</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <TouchableOpacity style={screenStyles.actionsIconButton} onPress={() => onOpenTaskActions(item)}>
-                    <MaterialCommunityIcons name="dots-horizontal" size={18} color="#2f635c" />
-                  </TouchableOpacity>
-                </View>
-              );
-            }}
-          />
-        </>
-      ) : null}
-
-      {!hasAnyTasks ? (
-        <View style={screenStyles.emptyStateCard}>
-          <MaterialCommunityIcons name="calendar-blank-outline" size={30} color="#5c7e79" />
-          <Text style={screenStyles.emptyStateTitle}>Nothing planned yet</Text>
-          <Text style={screenStyles.emptyStateText}>
-            Add a planner task for this date to start shaping the day.
-          </Text>
+          <View style={[screenStyles.summaryCard, screenStyles.partialCard]}>
+            <Text style={screenStyles.summaryCount}>{statusCounts.partial}</Text>
+            <Text style={screenStyles.summaryLabel}>Partial</Text>
+          </View>
+          <View style={[screenStyles.summaryCard, screenStyles.completedCard]}>
+            <Text style={screenStyles.summaryCount}>{statusCounts.completed}</Text>
+            <Text style={screenStyles.summaryLabel}>Completed</Text>
+          </View>
         </View>
-      ) : null}
+
+        {incomingPlannerAssignments.length > 0 ? (
+          <>
+            <Text style={screenStyles.sectionHeading}>Incoming Planner Requests</Text>
+            <View style={screenStyles.approvalList}>
+              {incomingPlannerAssignments.map((item) => (
+                <View key={item._id} style={screenStyles.approvalCard}>
+                  <View style={screenStyles.approvalHeaderRow}>
+                    <Text style={screenStyles.approvalTitle}>{item.title}</Text>
+                    <View style={screenStyles.approvalBadge}>
+                      <Text style={screenStyles.approvalBadgeText}>Needs Approval</Text>
+                    </View>
+                  </View>
+                  <Text style={screenStyles.approvalMeta}>
+                    From {item.fromUser?.displayName || item.fromUser?.username || 'Friend'}
+                  </Text>
+                  <Text style={screenStyles.approvalMeta}>
+                    Date: {item.date}
+                    {item.time ? ` | Time: ${item.time}` : ''}
+                  </Text>
+                  {item.notes ? <Text style={screenStyles.approvalNotes}>{item.notes}</Text> : null}
+                  <View style={screenStyles.approvalActions}>
+                    <TouchableOpacity
+                      style={screenStyles.approvalApproveButton}
+                      onPress={() => onAnswerIncomingPlanner(item._id, 'approve')}
+                    >
+                      <Text style={screenStyles.approvalApproveText}>Approve</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={screenStyles.approvalRejectButton}
+                      onPress={() => onAnswerIncomingPlanner(item._id, 'reject')}
+                    >
+                      <Text style={screenStyles.approvalRejectText}>Reject</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </>
+        ) : null}
+
+        {roadmapTasks.length > 0 ? (
+          <>
+            <Text style={screenStyles.sectionHeading}>Roadmap Tasks</Text>
+            <View style={screenStyles.listContent}>
+              {roadmapTasks.map((item) => {
+                const status = normalizeTaskStatus(item);
+                const createdByName =
+                  item.createdBy && String(item.createdBy._id || '') !== String(user.id || user._id || '')
+                    ? item.createdBy.displayName || item.createdBy.username
+                    : '';
+
+                return (
+                  <View key={item._id} style={screenStyles.taskRow}>
+                    <View style={screenStyles.taskMain}>
+                      <View style={screenStyles.roadmapTopRow}>
+                        <Text style={screenStyles.taskTitle}>{item.title}</Text>
+                        <Text style={screenStyles.taskTimeBadge}>{item.time}</Text>
+                      </View>
+                      {item.notes ? <Text style={screenStyles.taskMeta}>{item.notes}</Text> : null}
+                      {createdByName ? <Text style={screenStyles.createdByTag}>Created by {createdByName}</Text> : null}
+                      <TouchableOpacity
+                        style={[
+                          screenStyles.statusPill,
+                          status === 'completed'
+                            ? screenStyles.completedCard
+                            : status === 'partial'
+                              ? screenStyles.partialCard
+                              : screenStyles.pendingCard,
+                        ]}
+                        onPress={() => cycleTaskStatus(item)}
+                      >
+                        <Text style={screenStyles.statusPillText}>Status: {status}</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity style={screenStyles.actionsIconButton} onPress={() => onOpenTaskActions(item)}>
+                      <MaterialCommunityIcons name="dots-horizontal" size={18} color="#2f635c" />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
+
+        {unmanagedTasks.length > 0 ? (
+          <>
+            <Text style={screenStyles.sectionHeading}>Unmanaged Tasks</Text>
+            <View style={screenStyles.listContent}>
+              {unmanagedTasks.map((item) => {
+                const status = normalizeTaskStatus(item);
+                const createdByName =
+                  item.createdBy && String(item.createdBy._id || '') !== String(user.id || user._id || '')
+                    ? item.createdBy.displayName || item.createdBy.username
+                    : '';
+
+                return (
+                  <View key={item._id} style={screenStyles.taskRow}>
+                    <View style={screenStyles.taskMain}>
+                      <Text style={screenStyles.taskTitle}>{item.title}</Text>
+                      {item.notes ? <Text style={screenStyles.taskMeta}>{item.notes}</Text> : null}
+                      {createdByName ? <Text style={screenStyles.createdByTag}>Created by {createdByName}</Text> : null}
+                      <TouchableOpacity
+                        style={[
+                          screenStyles.statusPill,
+                          status === 'completed'
+                            ? screenStyles.completedCard
+                            : status === 'partial'
+                              ? screenStyles.partialCard
+                              : screenStyles.pendingCard,
+                        ]}
+                        onPress={() => cycleTaskStatus(item)}
+                      >
+                        <Text style={screenStyles.statusPillText}>Status: {status}</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity style={screenStyles.actionsIconButton} onPress={() => onOpenTaskActions(item)}>
+                      <MaterialCommunityIcons name="dots-horizontal" size={18} color="#2f635c" />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
+
+        {!hasAnyTasks ? (
+          <View style={screenStyles.emptyStateCard}>
+            <MaterialCommunityIcons name="calendar-blank-outline" size={30} color="#5c7e79" />
+            <Text style={screenStyles.emptyStateTitle}>Nothing planned yet</Text>
+            <Text style={screenStyles.emptyStateText}>
+              Add a planner task for this date to start shaping the day.
+            </Text>
+          </View>
+        ) : null}
+      </ScrollView>
 
       <TouchableOpacity style={screenStyles.addFloatingButton} onPress={onOpenCreateTask}>
         <MaterialCommunityIcons name="plus" size={28} color="#ffffff" />
@@ -192,6 +189,9 @@ export default function PlannerTabScreen({
 const screenStyles = StyleSheet.create({
   domainArea: {
     flex: 1,
+  },
+  content: {
+    paddingBottom: 92,
   },
   summaryRow: {
     flexDirection: 'row',

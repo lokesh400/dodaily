@@ -1,4 +1,4 @@
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import HapticTouchable from '../components/HapticTouchable';
@@ -19,107 +19,108 @@ export default function RemindersTabScreen({
 
   return (
     <View style={screenStyles.domainArea}>
-      <View style={screenStyles.summaryRow}>
-        <View style={[screenStyles.summaryCard, screenStyles.pendingCard]}>
-          <Text style={screenStyles.summaryCount}>{reminderCounts.pending}</Text>
-          <Text style={screenStyles.summaryLabel}>Pending</Text>
-        </View>
-        <View style={[screenStyles.summaryCard, screenStyles.completedCard]}>
-          <Text style={screenStyles.summaryCount}>{reminderCounts.completed}</Text>
-          <Text style={screenStyles.summaryLabel}>Completed</Text>
-        </View>
-        <View style={[screenStyles.summaryCard, screenStyles.upcomingCard]}>
-          <Text style={screenStyles.summaryCount}>{reminderCounts.upcoming}</Text>
-          <Text style={screenStyles.summaryLabel}>Upcoming</Text>
-        </View>
-      </View>
-
-      {incomingReminderAssignments.length > 0 ? (
-        <>
-          <Text style={screenStyles.sectionHeading}>Incoming Reminder Requests</Text>
-          <View style={screenStyles.approvalList}>
-            {incomingReminderAssignments.map((item) => (
-              <View key={item._id} style={screenStyles.approvalCard}>
-                <View style={screenStyles.approvalHeaderRow}>
-                  <Text style={screenStyles.approvalTitle}>{item.title}</Text>
-                  <View style={screenStyles.approvalBadge}>
-                    <Text style={screenStyles.approvalBadgeText}>Needs Approval</Text>
-                  </View>
-                </View>
-                <Text style={screenStyles.approvalMeta}>
-                  From {item.fromUser?.displayName || item.fromUser?.username || 'Friend'}
-                </Text>
-                <Text style={screenStyles.approvalMeta}>
-                  Date: {item.date}
-                  {item.time ? ` | Time: ${item.time}` : ''}
-                </Text>
-                {item.notes ? <Text style={screenStyles.approvalNotes}>{item.notes}</Text> : null}
-                <View style={screenStyles.approvalActions}>
-                  <TouchableOpacity
-                    style={screenStyles.approvalApproveButton}
-                    onPress={() => onAnswerIncomingReminder(item._id, 'approve')}
-                  >
-                    <Text style={screenStyles.approvalApproveText}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={screenStyles.approvalRejectButton}
-                    onPress={() => onAnswerIncomingReminder(item._id, 'reject')}
-                  >
-                    <Text style={screenStyles.approvalRejectText}>Reject</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={screenStyles.content}
+      >
+        <View style={screenStyles.summaryRow}>
+          <View style={[screenStyles.summaryCard, screenStyles.pendingCard]}>
+            <Text style={screenStyles.summaryCount}>{reminderCounts.pending}</Text>
+            <Text style={screenStyles.summaryLabel}>Pending</Text>
           </View>
-        </>
-      ) : null}
+          <View style={[screenStyles.summaryCard, screenStyles.completedCard]}>
+            <Text style={screenStyles.summaryCount}>{reminderCounts.completed}</Text>
+            <Text style={screenStyles.summaryLabel}>Completed</Text>
+          </View>
+          <View style={[screenStyles.summaryCard, screenStyles.upcomingCard]}>
+            <Text style={screenStyles.summaryCount}>{reminderCounts.upcoming}</Text>
+            <Text style={screenStyles.summaryLabel}>Upcoming</Text>
+          </View>
+        </View>
 
-      {sortedReminders.length > 0 ? (
-        <>
-          <Text style={screenStyles.sectionHeading}>Scheduled Reminders</Text>
-          <FlatList
-            data={sortedReminders}
-            keyExtractor={(item) => item._id}
-            contentContainerStyle={screenStyles.listContent}
-            scrollEnabled={false}
-            renderItem={({ item }) => (
-              <View style={screenStyles.taskRow}>
-                <View style={screenStyles.taskMain}>
-                  <View style={screenStyles.rowTop}>
-                    <Text style={[screenStyles.taskTitle, item.done && screenStyles.taskDone]}>{item.title}</Text>
-                    <Text style={screenStyles.taskTimeBadge}>{item.time}</Text>
+        {incomingReminderAssignments.length > 0 ? (
+          <>
+            <Text style={screenStyles.sectionHeading}>Incoming Reminder Requests</Text>
+            <View style={screenStyles.approvalList}>
+              {incomingReminderAssignments.map((item) => (
+                <View key={item._id} style={screenStyles.approvalCard}>
+                  <View style={screenStyles.approvalHeaderRow}>
+                    <Text style={screenStyles.approvalTitle}>{item.title}</Text>
+                    <View style={screenStyles.approvalBadge}>
+                      <Text style={screenStyles.approvalBadgeText}>Needs Approval</Text>
+                    </View>
                   </View>
-                  {item.notes ? <Text style={screenStyles.taskMeta}>{item.notes}</Text> : null}
-                  {item.createdBy && String(item.createdBy._id || '') !== String(user.id || user._id || '') ? (
-                    <Text style={screenStyles.createdByTag}>
-                      Created by {item.createdBy.displayName || item.createdBy.username}
-                    </Text>
-                  ) : null}
-                  <TouchableOpacity
-                    style={[screenStyles.statusPill, item.done ? screenStyles.completedCard : screenStyles.pendingCard]}
-                    onPress={() => onToggleReminderDone(item)}
-                  >
-                    <Text style={screenStyles.statusPillText}>Status: {item.done ? 'completed' : 'pending'}</Text>
+                  <Text style={screenStyles.approvalMeta}>
+                    From {item.fromUser?.displayName || item.fromUser?.username || 'Friend'}
+                  </Text>
+                  <Text style={screenStyles.approvalMeta}>
+                    Date: {item.date}
+                    {item.time ? ` | Time: ${item.time}` : ''}
+                  </Text>
+                  {item.notes ? <Text style={screenStyles.approvalNotes}>{item.notes}</Text> : null}
+                  <View style={screenStyles.approvalActions}>
+                    <TouchableOpacity
+                      style={screenStyles.approvalApproveButton}
+                      onPress={() => onAnswerIncomingReminder(item._id, 'approve')}
+                    >
+                      <Text style={screenStyles.approvalApproveText}>Approve</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={screenStyles.approvalRejectButton}
+                      onPress={() => onAnswerIncomingReminder(item._id, 'reject')}
+                    >
+                      <Text style={screenStyles.approvalRejectText}>Reject</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </>
+        ) : null}
+
+        {sortedReminders.length > 0 ? (
+          <>
+            <Text style={screenStyles.sectionHeading}>Scheduled Reminders</Text>
+            <View style={screenStyles.listContent}>
+              {sortedReminders.map((item) => (
+                <View key={item._id} style={screenStyles.taskRow}>
+                  <View style={screenStyles.taskMain}>
+                    <View style={screenStyles.rowTop}>
+                      <Text style={[screenStyles.taskTitle, item.done && screenStyles.taskDone]}>{item.title}</Text>
+                      <Text style={screenStyles.taskTimeBadge}>{item.time}</Text>
+                    </View>
+                    {item.notes ? <Text style={screenStyles.taskMeta}>{item.notes}</Text> : null}
+                    {item.createdBy && String(item.createdBy._id || '') !== String(user.id || user._id || '') ? (
+                      <Text style={screenStyles.createdByTag}>
+                        Created by {item.createdBy.displayName || item.createdBy.username}
+                      </Text>
+                    ) : null}
+                    <TouchableOpacity
+                      style={[screenStyles.statusPill, item.done ? screenStyles.completedCard : screenStyles.pendingCard]}
+                      onPress={() => onToggleReminderDone(item)}
+                    >
+                      <Text style={screenStyles.statusPillText}>Status: {item.done ? 'completed' : 'pending'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity style={screenStyles.actionsIconButton} onPress={() => onOpenReminderActions(item)}>
+                    <MaterialCommunityIcons name="dots-horizontal" size={18} color="#2f635c" />
                   </TouchableOpacity>
                 </View>
-                <TouchableOpacity style={screenStyles.actionsIconButton} onPress={() => onOpenReminderActions(item)}>
-                  <MaterialCommunityIcons name="dots-horizontal" size={18} color="#2f635c" />
-                </TouchableOpacity>
-              </View>
-            )}
-          />
-        </>
-      ) : null}
+              ))}
+            </View>
+          </>
+        ) : null}
 
-      {!hasAnyReminders ? (
-        <View style={screenStyles.emptyStateCard}>
-          <MaterialCommunityIcons name="bell-badge-outline" size={30} color="#5c7e79" />
-          <Text style={screenStyles.emptyStateTitle}>No reminders yet</Text>
-          <Text style={screenStyles.emptyStateText}>
-            Add a reminder with a time and DoDaily will keep it ready for you.
-          </Text>
-        </View>
-      ) : null}
+        {!hasAnyReminders ? (
+          <View style={screenStyles.emptyStateCard}>
+            <MaterialCommunityIcons name="bell-badge-outline" size={30} color="#5c7e79" />
+            <Text style={screenStyles.emptyStateTitle}>No reminders yet</Text>
+            <Text style={screenStyles.emptyStateText}>
+              Add a reminder with a time and DoDaily will keep it ready for you.
+            </Text>
+          </View>
+        ) : null}
+      </ScrollView>
 
       <TouchableOpacity style={screenStyles.addFloatingButton} onPress={onOpenCreateReminder}>
         <MaterialCommunityIcons name="plus" size={28} color="#ffffff" />
@@ -131,6 +132,9 @@ export default function RemindersTabScreen({
 const screenStyles = StyleSheet.create({
   domainArea: {
     flex: 1,
+  },
+  content: {
+    paddingBottom: 92,
   },
   summaryRow: {
     flexDirection: 'row',

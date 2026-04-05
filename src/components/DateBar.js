@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View, Dimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import HapticTouchable from './HapticTouchable';
 
 const TouchableOpacity = HapticTouchable;
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
 
 function toISODate(date) {
   const year = date.getFullYear();
@@ -19,7 +21,8 @@ function shiftISODate(isoDate, days) {
   return toISODate(date);
 }
 
-function buildDateStrip(centerDate, before = 0, after = 21) {
+// 🔥 supports past + future
+function buildDateStrip(centerDate, before = 14, after = 21) {
   const days = [];
   for (let i = -before; i <= after; i += 1) {
     days.push(shiftISODate(centerDate, i));
@@ -39,27 +42,48 @@ function dateLabel(isoDate) {
 
 export default function DateBar({ selectedDate, onSelectDate, onOpenPicker }) {
   const scrollRef = useRef(null);
-  const dates = useMemo(() => buildDateStrip(selectedDate), [selectedDate]);
 
+  // ✅ today's fallback
+  const today = toISODate(new Date());
+  const activeDate = selectedDate || today;
+
+  // ✅ build dates around active date
+  const dates = useMemo(() => buildDateStrip(activeDate, 14, 21), [activeDate]);
+
+  // ✅ auto select today if nothing passed
   useEffect(() => {
-    const selectedIndex = dates.findIndex((dateItem) => dateItem === selectedDate);
-    if (selectedIndex < 0 || !scrollRef.current) {
-      return;
+    if (!selectedDate && onSelectDate) {
+      onSelectDate(today);
     }
+  }, []);
 
-    const chipWithGap = 72;
-    scrollRef.current.scrollTo({
-      x: selectedIndex * chipWithGap,
-      animated: true,
-    });
-  }, [dates, selectedDate]);
+  // ✅ center selected date
+  useEffect(() => {
+    const selectedIndex = dates.findIndex((d) => d === activeDate);
+    if (selectedIndex < 0 || !scrollRef.current) return;
+
+    const chipWidth = 60; // based on width + margin
+    const centerOffset = SCREEN_WIDTH / 2 - chipWidth / 2;
+
+    setTimeout(() => {
+      scrollRef.current.scrollTo({
+        x: selectedIndex * chipWidth - centerOffset,
+        animated: true,
+      });
+    }, 0);
+  }, [dates, activeDate]);
 
   return (
     <View style={styles.dateBarCard}>
       <View style={styles.dateBarHeader}>
         <Text style={styles.dateBarEyebrow}>Pick a day</Text>
+
         <TouchableOpacity style={styles.calendarButton} onPress={onOpenPicker}>
-          <MaterialCommunityIcons name="calendar-month-outline" size={19} color="#0f6e68" />
+          <MaterialCommunityIcons
+            name="calendar-month-outline"
+            size={19}
+            color="#0f6e68"
+          />
         </TouchableOpacity>
       </View>
 
@@ -70,15 +94,31 @@ export default function DateBar({ selectedDate, onSelectDate, onOpenPicker }) {
         contentContainerStyle={styles.dateScrollContent}
       >
         {dates.map((dateItem) => {
-          const active = dateItem === selectedDate;
+          const active = dateItem === activeDate;
+
           return (
             <TouchableOpacity
               key={dateItem}
               style={[styles.dateChip, active && styles.dateChipActive]}
               onPress={() => onSelectDate(dateItem)}
             >
-              <Text style={[styles.dateChipDay, active && styles.dateChipTextActive]}>{dayLabel(dateItem)}</Text>
-              <Text style={[styles.dateChipDate, active && styles.dateChipTextActive]}>{dateLabel(dateItem)}</Text>
+              <Text
+                style={[
+                  styles.dateChipDay,
+                  active && styles.dateChipTextActive,
+                ]}
+              >
+                {dayLabel(dateItem)}
+              </Text>
+
+              <Text
+                style={[
+                  styles.dateChipDate,
+                  active && styles.dateChipTextActive,
+                ]}
+              >
+                {dateLabel(dateItem)}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -102,12 +142,14 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
   },
+
   dateBarHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 8,
   },
+
   dateBarEyebrow: {
     fontSize: 11,
     fontWeight: '800',
@@ -115,20 +157,23 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
+
   dateScrollContent: {
     paddingRight: 8,
   },
+
   dateChip: {
     backgroundColor: '#f7fbf9',
     borderWidth: 1,
     borderColor: '#dceae5',
     borderRadius: 14,
     paddingVertical: 8,
-    paddingHorizontal: 10,
-    marginRight: 8,
-    width: 64,
+    paddingHorizontal: 2,
+    marginRight: 2,
+    width: 55,
     alignItems: 'center',
   },
+
   dateChipActive: {
     backgroundColor: '#0d7a76',
     borderColor: '#0d7a76',
@@ -138,21 +183,25 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
+
   dateChipDay: {
     fontSize: 10,
     color: '#567673',
     fontWeight: '800',
     textTransform: 'uppercase',
   },
+
   dateChipDate: {
     fontSize: 12,
     color: '#193733',
     fontWeight: '800',
     marginTop: 2,
   },
+
   dateChipTextActive: {
     color: '#ffffff',
   },
+
   calendarButton: {
     width: 34,
     height: 34,

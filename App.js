@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Modal,
   Platform,
@@ -60,6 +62,14 @@ import {
   initializeNotifications,
   syncReminderNotifications,
 } from './src/utils/notifications';
+import {
+  clearReminderCache,
+  clearSessionSnapshot,
+  loadReminderCache,
+  loadSessionSnapshot,
+  saveReminderCache,
+  saveSessionSnapshot,
+} from './src/utils/localCache';
 import { triggerErrorFeedback, triggerSuccessFeedback } from './src/utils/haptics';
 import { isValidClockTime, parseClockTime, parseTimeToMinutes } from './src/utils/time';
 
@@ -130,6 +140,31 @@ function getReminderTimestamp(reminder) {
   return Number.isNaN(reminderDate.getTime()) ? null : reminderDate.getTime();
 }
 
+function isNetworkIssue(error) {
+  return Boolean(error?.isNetworkError || error?.status === 0);
+}
+
+function formatSyncTime(isoText) {
+  if (!isoText) {
+    return '';
+  }
+
+  const parsedDate = new Date(isoText);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return '';
+  }
+
+  const datePart = parsedDate.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  const timePart = parsedDate.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${datePart}, ${timePart}`;
+}
+
 export default function App() {
   const insets = useSafeAreaInsets();
   const androidStatusBarHeight = Platform.OS === 'android' ? NativeStatusBar.currentHeight || 0 : 0;
@@ -198,10 +233,22 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState('');
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState('');
   const [actionStatus, setActionStatus] = useState({
     visible: false,
     title: '',
     subtitle: '',
+  });
+  const startupPulse = useRef(new Animated.Value(0.42)).current;
+  const startupLift = useRef(new Animated.Value(0)).current;
+  const reminderCacheSignatureRef = useRef('');
+  const sessionSnapshotSignatureRef = useRef('');
+  const rawSocialDataRef = useRef({
+    incomingFriendRequests: [],
+    outgoingFriendRequests: [],
+    incomingAssignments: [],
+    outgoingAssignments: [],
   });
   const notificationSnapshotRef = useRef({
     isPrimed: false,
@@ -300,6 +347,8 @@ export default function App() {
       .map((friend) => friend.displayName || friend.username);
   }, [friends, selectedFriendIds]);
 
+  const lastSyncedLabel = useMemo(() => formatSyncTime(lastSyncedAt), [lastSyncedAt]);
+
   const incomingPlannerAssignments = useMemo(() => {
     return (incomingAssignments || [])
       .filter((assignment) => assignment.itemType === 'task' && assignment.status === 'pending')
@@ -332,6 +381,114 @@ export default function App() {
   const reminderNotificationPlanRef = useRef(reminderNotificationPlan);
   reminderNotificationPlanRef.current = reminderNotificationPlan;
 
+  const applyLoadedData = ({
+    taskData = [],
+    reminderData = [],
+    friendsData = [],
+    incomingFriendRequestsData = [],
+    outgoingFriendRequestsData = [],
+    incomingAssignmentsData = [],
+    outgoingAssignmentsData = [],
+  }) => {
+    rawSocialDataRef.current = {
+      incomingFriendRequests: incomingFriendRequestsData,
+      outgoingFriendRequests: outgoingFriendRequestsData,
+      incomingAssignments: incomingAssignmentsData,
+      outgoingAssignments: outgoingAssignmentsData,
+    };
+
+    setTasks(taskData);
+    setReminders(reminderData);
+    setFriends(friendsData);
+    setIncomingFriendRequests(
+      filterItemsByStatus(rawSocialDataRef.current.incomingFriendRequests, friendRequestFilter)
+    );
+    setOutgoingFriendRequests(
+      filterItemsByStatus(rawSocialDataRef.current.outgoingFriendRequests, friendRequestFilter)
+    );
+    setIncomingAssignments(
+      filterItemsByStatus(rawSocialDataRef.current.incomingAssignments, incomingAssignmentFilter)
+    );
+    setOutgoingAssignments(
+      filterItemsByStatus(rawSocialDataRef.current.outgoingAssignments, outgoingAssignmentFilter)
+    );
+  };
+
+  const persistLocalCaches = async ({
+    userData,
+    taskData = [],
+    reminderData = [],
+    friendsData = [],
+    incomingFriendRequestsData = [],
+    outgoingFriendRequestsData = [],
+    incomingAssignmentsData = [],
+    outgoingAssignmentsData = [],
+    updatedAt = new Date().toISOString(),
+  }) => {
+    const reminderSignature = JSON.stringify(
+      reminderData
+        .map((reminder) => `${reminder._id}:${reminder.date}:${reminder.time}:${Boolean(reminder.done)}`)
+        .sort()
+    );
+
+    if (reminderCacheSignatureRef.current !== reminderSignature) {
+      reminderCacheSignatureRef.current = reminderSignature;
+      await saveReminderCache(reminderData, updatedAt);
+    }
+
+    const sessionSignature = JSON.stringify({
+      userId: String(userData?._id || userData?.id || ''),
+      userVersion: `${userData?.displayName || ''}:${userData?.username || ''}:${userData?.email || ''}:${Boolean(userData?.verified)}`,
+      taskCount: taskData.length,
+      reminderCount: reminderData.length,
+      friendCount: friendsData.length,
+      incomingFriendRequestCount: incomingFriendRequestsData.length,
+      outgoingFriendRequestCount: outgoingFriendRequestsData.length,
+      incomingAssignmentCount: incomingAssignmentsData.length,
+      outgoingAssignmentCount: outgoingAssignmentsData.length,
+      reminderSignature,
+    });
+
+    if (sessionSnapshotSignatureRef.current !== sessionSignature) {
+      sessionSnapshotSignatureRef.current = sessionSignature;
+      await saveSessionSnapshot({
+        user: userData || null,
+        tasks: taskData,
+        reminders: reminderData,
+        friends: friendsData,
+        incomingFriendRequests: incomingFriendRequestsData,
+        outgoingFriendRequests: outgoingFriendRequestsData,
+        incomingAssignments: incomingAssignmentsData,
+        outgoingAssignments: outgoingAssignmentsData,
+        updatedAt,
+      });
+    }
+  };
+
+  const hydrateFromSessionSnapshot = (snapshot) => {
+    if (!snapshot) {
+      return false;
+    }
+
+    const snapshotUser = snapshot.user || null;
+    if (!snapshotUser) {
+      return false;
+    }
+
+    setUser(snapshotUser);
+    applyLoadedData({
+      taskData: snapshot.tasks || [],
+      reminderData: snapshot.reminders || [],
+      friendsData: snapshot.friends || [],
+      incomingFriendRequestsData: snapshot.incomingFriendRequests || [],
+      outgoingFriendRequestsData: snapshot.outgoingFriendRequests || [],
+      incomingAssignmentsData: snapshot.incomingAssignments || [],
+      outgoingAssignmentsData: snapshot.outgoingAssignments || [],
+    });
+    setLastSyncedAt(snapshot.updatedAt || '');
+    return true;
+  };
+
   const runWithActionFeedback = async ({ title, subtitle = 'Please wait a moment.', work }) => {
     setActionStatus({
       visible: true,
@@ -356,13 +513,34 @@ export default function App() {
   };
 
   const refreshAllData = async (options = {}) => {
+    const { silentOffline = false } = options;
+
     try {
       await loadAllData(options);
+      setIsOfflineMode(false);
       return true;
     } catch (requestError) {
       if (requestError?.status === 401) {
         setError('Your session expired. Please log in again.');
         setUser(null);
+        setIsOfflineMode(false);
+        setLastSyncedAt('');
+        setTasks([]);
+        setReminders([]);
+        setFriends([]);
+        setIncomingFriendRequests([]);
+        setOutgoingFriendRequests([]);
+        setIncomingAssignments([]);
+        setOutgoingAssignments([]);
+        await Promise.allSettled([clearReminderCache(), clearSessionSnapshot()]);
+        return false;
+      }
+
+      if (isNetworkIssue(requestError)) {
+        setIsOfflineMode(true);
+        if (!silentOffline && !user) {
+          setError('You are offline. Connect once to restore your account data.');
+        }
         return false;
       }
 
@@ -408,7 +586,7 @@ export default function App() {
     };
   };
 
-  const loadAllData = async ({ suppressNotifications = false, verifiedOverride } = {}) => {
+  const loadAllData = async ({ suppressNotifications = false, verifiedOverride, snapshotUser } = {}) => {
     const canUseFriendFeatures = Boolean(verifiedOverride ?? user?.verified);
     const [
       taskData,
@@ -426,20 +604,93 @@ export default function App() {
       canUseFriendFeatures ? listOutgoingAssignments('all') : Promise.resolve([]),
     ]);
 
-    setTasks(taskData);
-    setReminders(reminderData);
-    setFriends(friendsData.friends || []);
-    setIncomingFriendRequests(filterItemsByStatus(friendRequestsData.incoming || [], friendRequestFilter));
-    setOutgoingFriendRequests(filterItemsByStatus(friendRequestsData.outgoing || [], friendRequestFilter));
-    setIncomingAssignments(filterItemsByStatus(incomingAssignmentsData || [], incomingAssignmentFilter));
-    setOutgoingAssignments(filterItemsByStatus(outgoingAssignmentsData || [], outgoingAssignmentFilter));
+    const friendsList = friendsData.friends || [];
+    const incomingFriendRequestsData = friendRequestsData.incoming || [];
+    const outgoingFriendRequestsData = friendRequestsData.outgoing || [];
+    const incomingAssignmentsList = incomingAssignmentsData || [];
+    const outgoingAssignmentsList = outgoingAssignmentsData || [];
+    const cacheUpdatedAt = new Date().toISOString();
+
+    applyLoadedData({
+      taskData,
+      reminderData,
+      friendsData: friendsList,
+      incomingFriendRequestsData,
+      outgoingFriendRequestsData,
+      incomingAssignmentsData: incomingAssignmentsList,
+      outgoingAssignmentsData: outgoingAssignmentsList,
+    });
+    setLastSyncedAt(cacheUpdatedAt);
 
     await syncLiveNotifications({
       friendRequestsData,
       incomingAssignmentsData,
       suppressNotifications: suppressNotifications || !canUseFriendFeatures,
     });
+
+    try {
+      await persistLocalCaches({
+        userData: snapshotUser || user,
+        taskData,
+        reminderData,
+        friendsData: friendsList,
+        incomingFriendRequestsData,
+        outgoingFriendRequestsData,
+        incomingAssignmentsData: incomingAssignmentsList,
+        outgoingAssignmentsData: outgoingAssignmentsList,
+        updatedAt: cacheUpdatedAt,
+      });
+    } catch (cacheError) {
+      // Ignore cache persistence errors and keep the app responsive.
+    }
   };
+
+  useEffect(() => {
+    if (!booting) {
+      return undefined;
+    }
+
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(startupPulse, {
+          toValue: 0.9,
+          duration: 850,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(startupPulse, {
+          toValue: 0.42,
+          duration: 850,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    const liftLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(startupLift, {
+          toValue: -8,
+          duration: 900,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(startupLift, {
+          toValue: 0,
+          duration: 900,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    pulseLoop.start();
+    liftLoop.start();
+
+    return () => {
+      pulseLoop.stop();
+      liftLoop.stop();
+    };
+  }, [booting, startupLift, startupPulse]);
 
   useEffect(() => {
     if (!user) {
@@ -474,23 +725,97 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
+    let isCancelled = false;
+
     async function bootstrap() {
+      let hasSessionFallback = false;
+      let restoredSyncAt = '';
+
+      try {
+        const [sessionSnapshot, reminderCache] = await Promise.all([
+          loadSessionSnapshot(),
+          loadReminderCache(),
+        ]);
+        if (isCancelled) {
+          return;
+        }
+
+        if (Array.isArray(reminderCache?.reminders) && reminderCache.reminders.length > 0) {
+          setReminders(reminderCache.reminders);
+        }
+        if (reminderCache?.updatedAt) {
+          restoredSyncAt = reminderCache.updatedAt;
+          setLastSyncedAt(reminderCache.updatedAt);
+        }
+
+        hasSessionFallback = hydrateFromSessionSnapshot(sessionSnapshot);
+        if (hasSessionFallback) {
+          restoredSyncAt = sessionSnapshot?.updatedAt || restoredSyncAt;
+          setIsOfflineMode(true);
+        }
+      } catch (cacheReadError) {
+        // Ignore cache read failures and continue online bootstrap.
+      }
+
       try {
         const currentUser = await me();
+        if (isCancelled) {
+          return;
+        }
+
         setUser(currentUser);
-        await refreshAllData({ suppressNotifications: true, verifiedOverride: currentUser.verified });
+        const didRefresh = await refreshAllData({
+          suppressNotifications: true,
+          verifiedOverride: currentUser.verified,
+          snapshotUser: currentUser,
+          silentOffline: true,
+        });
+
+        if (!didRefresh && !hasSessionFallback) {
+          const cachedSyncLabel = formatSyncTime(restoredSyncAt);
+          setError(
+            cachedSyncLabel
+              ? `You are offline. Last sync was ${cachedSyncLabel}.`
+              : 'You are offline. Connect once to restore your account data.'
+          );
+        } else if (didRefresh) {
+          setError('');
+        }
       } catch (bootstrapError) {
+        if (isCancelled) {
+          return;
+        }
+
         if (bootstrapError?.status === 401) {
           setUser(null);
+          setIsOfflineMode(false);
+          setLastSyncedAt('');
+          try {
+            await clearSessionSnapshot();
+            await clearReminderCache();
+          } catch (cacheClearError) {
+            // Ignore cache clear failures on session expiry.
+          }
+        } else if (isNetworkIssue(bootstrapError)) {
+          setIsOfflineMode(hasSessionFallback);
+          if (!hasSessionFallback) {
+            setError('You are offline. Connect once to restore your account data.');
+          }
         } else {
           setError(bootstrapError?.message || 'Could not restore your session right now.');
         }
       } finally {
-        setBooting(false);
+        if (!isCancelled) {
+          setBooting(false);
+        }
       }
     }
 
     bootstrap();
+
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -505,6 +830,13 @@ export default function App() {
       outgoingFriendRequestStatuses: new Map(),
       incomingAssignmentIds: new Set(),
     };
+    rawSocialDataRef.current = {
+      incomingFriendRequests: [],
+      outgoingFriendRequests: [],
+      incomingAssignments: [],
+      outgoingAssignments: [],
+    };
+    setIsOfflineMode(false);
 
     clearReminderNotifications();
     return undefined;
@@ -515,7 +847,13 @@ export default function App() {
       return;
     }
 
-    refreshAllData();
+    const rawSocialData = rawSocialDataRef.current;
+    setIncomingFriendRequests(filterItemsByStatus(rawSocialData.incomingFriendRequests, friendRequestFilter));
+    setOutgoingFriendRequests(filterItemsByStatus(rawSocialData.outgoingFriendRequests, friendRequestFilter));
+    setIncomingAssignments(filterItemsByStatus(rawSocialData.incomingAssignments, incomingAssignmentFilter));
+    setOutgoingAssignments(filterItemsByStatus(rawSocialData.outgoingAssignments, outgoingAssignmentFilter));
+
+    refreshAllData({ silentOffline: true });
   }, [friendRequestFilter, incomingAssignmentFilter, outgoingAssignmentFilter]);
 
   useEffect(() => {
@@ -524,19 +862,19 @@ export default function App() {
     }
 
     const intervalId = setInterval(() => {
-      refreshAllData();
+      refreshAllData({ silentOffline: true });
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
   }, [user, friendRequestFilter, incomingAssignmentFilter, outgoingAssignmentFilter]);
 
   useEffect(() => {
-    if (!user) {
+    if (!user && reminders.length === 0) {
       return;
     }
 
     syncReminderNotifications(reminderNotificationPlanRef.current);
-  }, [user, reminderNotificationSignature]);
+  }, [user, reminders.length, reminderNotificationSignature]);
 
   const handleLogin = async ({ username, password }) => {
     setError('');
@@ -548,7 +886,11 @@ export default function App() {
         work: async () => {
           const authUser = await login({ username, password });
           setUser(authUser);
-          await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
+          await refreshAllData({
+            suppressNotifications: true,
+            verifiedOverride: authUser.verified,
+            snapshotUser: authUser,
+          });
         },
       });
     } catch (authError) {
@@ -568,7 +910,11 @@ export default function App() {
         work: async () => {
           const authUser = await register({ displayName, username, password });
           setUser(authUser);
-          await refreshAllData({ suppressNotifications: true, verifiedOverride: authUser.verified });
+          await refreshAllData({
+            suppressNotifications: true,
+            verifiedOverride: authUser.verified,
+            snapshotUser: authUser,
+          });
         },
       });
       return true;
@@ -961,7 +1307,17 @@ export default function App() {
       });
       registeredPushTokenRef.current = null;
       clearReminderNotifications();
+      await Promise.allSettled([clearReminderCache(), clearSessionSnapshot()]);
       setUser(null);
+      setTasks([]);
+      setReminders([]);
+      setFriends([]);
+      setIncomingFriendRequests([]);
+      setOutgoingFriendRequests([]);
+      setIncomingAssignments([]);
+      setOutgoingAssignments([]);
+      setLastSyncedAt('');
+      setIsOfflineMode(false);
       setAuthScreen('login');
       setActiveTab('planner');
       setShowFriendActionMenu(false);
@@ -1094,6 +1450,11 @@ export default function App() {
     setShowFriendActionMenu(true);
   };
 
+  const startupLogoScale = startupPulse.interpolate({
+    inputRange: [0.42, 0.9],
+    outputRange: [0.98, 1.03],
+  });
+
   if (booting) {
     return (
       <SafeAreaView
@@ -1103,7 +1464,27 @@ export default function App() {
         <View style={styles.bgOrbTop} />
         <View style={styles.bgOrbBottom} />
         <View style={styles.loaderWrap}>
-          <ActivityIndicator size="large" color="#0d7a76" />
+          <Animated.View
+            style={[
+              styles.startupLogoCard,
+              {
+                transform: [{ translateY: startupLift }, { scale: startupLogoScale }],
+              },
+            ]}
+          >
+            <View style={styles.startupLogoBadge}>
+              <MaterialCommunityIcons name="calendar-check-outline" size={32} color="#ffffff" />
+            </View>
+            <Text style={styles.startupLogoTitle}>DoDaily</Text>
+            <Text style={styles.startupLogoSubtitle}>Syncing your day plan</Text>
+          </Animated.View>
+
+          <View style={styles.startupSkeletonStack}>
+            <Animated.View style={[styles.startupSkeletonBar, styles.startupSkeletonBarWide, { opacity: startupPulse }]} />
+            <Animated.View style={[styles.startupSkeletonBar, styles.startupSkeletonBarMid, { opacity: startupPulse }]} />
+            <Animated.View style={[styles.startupSkeletonBar, styles.startupSkeletonBarWide, { opacity: startupPulse }]} />
+            <Animated.View style={[styles.startupSkeletonBar, styles.startupSkeletonBarShort, { opacity: startupPulse }]} />
+          </View>
         </View>
       </SafeAreaView>
     );
@@ -1196,6 +1577,16 @@ export default function App() {
               />
             ) : null}
           </>
+        ) : null}
+
+        {isOfflineMode ? (
+          <View style={styles.offlineBanner}>
+            <MaterialCommunityIcons name="wifi-off" size={16} color="#8a5715" />
+            <Text style={styles.offlineText}>
+              Offline mode
+              {lastSyncedLabel ? ` | Last sync: ${lastSyncedLabel}` : ''}
+            </Text>
+          </View>
         ) : null}
 
         {error ? (
@@ -1953,6 +2344,64 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  startupLogoCard: {
+    width: '100%',
+    maxWidth: 300,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#cfe6df',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    paddingVertical: 22,
+    paddingHorizontal: 16,
+    shadowColor: '#15443f',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  startupLogoBadge: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: '#0d7a76',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  startupLogoTitle: {
+    color: '#173238',
+    fontSize: 28,
+    fontWeight: '800',
+  },
+  startupLogoSubtitle: {
+    color: '#59706d',
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  startupSkeletonStack: {
+    width: '100%',
+    maxWidth: 300,
+    marginTop: 18,
+    alignItems: 'flex-start',
+  },
+  startupSkeletonBar: {
+    height: 14,
+    borderRadius: 8,
+    backgroundColor: '#dbe8e3',
+    marginBottom: 10,
+  },
+  startupSkeletonBarWide: {
+    width: '100%',
+  },
+  startupSkeletonBarMid: {
+    width: '76%',
+  },
+  startupSkeletonBarShort: {
+    width: '52%',
   },
   container: {
     flex: 1,
@@ -2487,6 +2936,22 @@ const styles = StyleSheet.create({
     color: '#9a1f1f',
     fontWeight: '700',
     marginLeft: 8,
+  },
+  offlineText: {
+    color: '#8a5715',
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff7df',
+    borderWidth: 1,
+    borderColor: '#f0dca6',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginBottom: 10,
   },
   errorBanner: {
     flexDirection: 'row',
