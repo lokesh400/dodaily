@@ -23,8 +23,10 @@ import {
   login,
   logout,
   me,
+  requestPasswordReset,
   register,
   registerPushToken,
+  sendVerificationEmail,
   unregisterPushToken,
   updateMe,
 } from './src/api/authApi';
@@ -52,9 +54,6 @@ import LoginScreen from './src/screens/LoginScreen';
 import PlannerTabScreen from './src/screens/PlannerTabScreen';
 import RemindersTabScreen from './src/screens/RemindersTabScreen';
 import SettingsTabScreen from './src/screens/SettingsTabScreen';
-// import { sendVerificationEmail, updateMe } from './src/api/authApi';
-// import { updateMe } from './src/api/authApi';
-import { sendVerificationEmail } from './src/api/authApi';
 import SignupScreen from './src/screens/SignupScreen';
 import {
   clearReminderNotifications,
@@ -926,6 +925,17 @@ export default function App() {
     }
   };
 
+  const handleForgotPassword = async (identifier) => {
+    setError('');
+    try {
+      const response = await requestPasswordReset(identifier);
+      return response;
+    } catch (forgotError) {
+      setError(forgotError.message || 'Failed to send reset link');
+      throw forgotError;
+    }
+  };
+
   const handleCreateTask = async ({ title, notes, date, time }) => {
     setError('');
     setLoading(true);
@@ -1499,16 +1509,17 @@ export default function App() {
         <View style={styles.bgOrbTop} />
         <View style={styles.bgOrbBottom} />
         <View style={styles.authWrap}>
-          <View style={styles.authHeroCard}>
+          {/* <View style={styles.authHeroCard}>
             <Text style={styles.authHeroEyebrow}>DoDaily</Text>
             <Text style={styles.authHeroTitle}>Plan better.{"\n"}Remember calmly.</Text>
             <Text style={styles.authHeroSubtitle}>
               A cleaner space for planners, reminders, friends, approvals, and timely alerts.
             </Text>
-          </View>
+          </View> */}
           {authScreen === 'login' ? (
           <LoginScreen
             onLogin={handleLogin}
+            onForgotPassword={handleForgotPassword}
             loading={loading}
             error={error}
               onGoToSignup={() => {

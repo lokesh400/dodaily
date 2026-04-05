@@ -1,6 +1,6 @@
 const API_BASE_URL = "https://dodaily.onrender.com"
 
-// const API_BASE_URL = "http://10.60.96.198:4000";
+// const API_BASE_URL = "http://10.200.64.198:4000";
 
 function createApiError(message, details = {}) {
   const error = new Error(message);

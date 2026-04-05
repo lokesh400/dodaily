@@ -5,7 +5,7 @@ export function listFriends() {
 }
 
 export function sendFriendRequest(payload) {
-  return apiRequest('/api/friends/request', {
+  return apiRequest('/api/friends/request?notifyEmail=false', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -20,7 +20,7 @@ export function getFriendBadges() {
 }
 
 export function respondFriendRequest(requestId, action) {
-  return apiRequest(`/api/friends/requests/${requestId}/respond`, {
+  return apiRequest(`/api/friends/requests/${requestId}/respond?notifyEmail=false`, {
     method: 'PATCH',
     body: JSON.stringify({ action }),
   });

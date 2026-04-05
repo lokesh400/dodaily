@@ -1,4 +1,3 @@
-
 import { apiRequest } from './client';
 
 export function sendVerificationEmail() {
@@ -50,4 +49,46 @@ export function unregisterPushToken(pushToken) {
     method: 'DELETE',
     body: JSON.stringify({ pushToken }),
   });
+}
+
+export async function requestPasswordReset(identifier) {
+  const normalizedIdentifier = String(identifier || '').trim();
+  if (!normalizedIdentifier) {
+    throw new Error('Username or email is required');
+  }
+
+  const candidates = [
+    {
+      path: '/api/auth/forgot-password',
+      payload: { usernameOrEmail: normalizedIdentifier },
+    },
+    {
+      path: '/api/auth/forgot-password',
+      payload: normalizedIdentifier.includes('@')
+        ? { email: normalizedIdentifier }
+        : { username: normalizedIdentifier },
+    },
+    {
+      path: '/api/auth/request-password-reset',
+      payload: { usernameOrEmail: normalizedIdentifier },
+    },
+  ];
+
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    try {
+      return await apiRequest(candidate.path, {
+        method: 'POST',
+        body: JSON.stringify(candidate.payload),
+      });
+    } catch (requestError) {
+      lastError = requestError;
+      if (requestError?.status !== 400 && requestError?.status !== 404) {
+        throw requestError;
+      }
+    }
+  }
+
+  throw lastError || new Error('Unable to request password reset right now.');
 }
